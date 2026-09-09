@@ -88,14 +88,34 @@ ORIGINALS_BYTES=$((UPLOAD_BYTES + LIBRARY_BYTES))
 
 # --- Immich statistics ----------------------------------------------------
 
+# API_OK distinguishes "the API answered and reported zero" from "the API could
+# not be reached or its field names changed". Without it, both look like zero
+# photos on the dashboard, which is the same silent-wrongness the staleness
+# banner exists to prevent. Immich changed several API shapes at v3.0.0, so
+# this is a live risk, not a hypothetical one.
 STATS_JSON="$(immich_api '/server/statistics')"
-if [[ -n "$STATS_JSON" ]] && command -v jq >/dev/null 2>&1; then
+API_OK=false
+STATS_WARNING=""
+
+if [[ -z "$STATS_JSON" ]]; then
+  STATS_WARNING="immich api unreachable or key rejected"
+elif ! command -v jq >/dev/null 2>&1; then
+  STATS_WARNING="jq not installed on the collector host"
+elif ! echo "$STATS_JSON" | jq -e 'has("photos")' >/dev/null 2>&1; then
+  # The endpoint answered but does not look like the schema we expect.
+  STATS_WARNING="unexpected /server/statistics schema - check for an Immich API change"
+else
+  API_OK=true
+fi
+
+if $API_OK; then
   PHOTO_COUNT=$(echo "$STATS_JSON" | jq -r '.photos // 0')
   VIDEO_COUNT=$(echo "$STATS_JSON" | jq -r '.videos // 0')
   IMMICH_USAGE=$(echo "$STATS_JSON" | jq -r '.usage // 0')
   USAGE_PHOTOS=$(echo "$STATS_JSON" | jq -r '.usagePhotos // 0')
   USAGE_VIDEOS=$(echo "$STATS_JSON" | jq -r '.usageVideos // 0')
 else
+  echo "[$(date -Is)] WARNING: $STATS_WARNING" >&2
   PHOTO_COUNT=0; VIDEO_COUNT=0; IMMICH_USAGE=0; USAGE_PHOTOS=0; USAGE_VIDEOS=0
 fi
 
@@ -194,7 +214,9 @@ read -r -d '' PAYLOAD <<JSON || true
     "usage_photos": $(json_num "$USAGE_PHOTOS"),
     "usage_videos": $(json_num "$USAGE_VIDEOS"),
     "api_disk_figure": $(json_num "$IMMICH_USAGE"),
-    "failed_jobs": $(json_num "$FAILED_JOBS")
+    "failed_jobs": $(json_num "$FAILED_JOBS"),
+    "api_ok": ${API_OK},
+    "api_warning": "${STATS_WARNING}"
   },
   "backup": {
     "last_backup_ts": ${LAST_BACKUP_TS:-0},

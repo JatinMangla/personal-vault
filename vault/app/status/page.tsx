@@ -190,6 +190,14 @@ export default function StatusPage() {
             { label: 'DB backups', bytes: payload.storage.backups_bytes, color: 'var(--text-faint)' },
           ]}
         />
+        {payload.immich.api_ok === false && (
+          <div className="banner banner-amber" role="alert">
+            <strong>Immich statistics unavailable.</strong> The counts below read
+            zero because the API could not be read, not because the library is
+            empty{payload.immich.api_warning ? ` (${payload.immich.api_warning})` : ''}.
+            Storage figures are computed locally and remain accurate.
+          </div>
+        )}
         <div className="mt-1">
           <StatRow label="Photos" value={payload.immich.photo_count.toLocaleString()} />
           <StatRow label="Videos" value={payload.immich.video_count.toLocaleString()} />

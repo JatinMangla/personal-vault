@@ -44,7 +44,9 @@ claim in the README is untested.
 
 ### 1. Oracle Cloud (the long pole)
 
-Follow `infra/docs/oracle-setup.md` exactly. Two irreversible decisions:
+**On Windows, follow `infra/docs/WINDOWS-DEPLOY.md`** — Ansible cannot run from
+a Windows laptop, so that guide runs it on the VM itself. Use
+`infra/docs/oracle-setup.md` for the console steps it references. Two irreversible decisions:
 
 - **Home region must be `ap-mumbai-1` or `ap-hyderabad-1`** — it cannot be
   changed after account creation.

@@ -142,7 +142,7 @@ name: $PROJECT
 
 services:
   database:
-    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
     environment:
       POSTGRES_PASSWORD: $DRILL_DB_PASS
       POSTGRES_USER: postgres
@@ -157,7 +157,7 @@ services:
       start_period: 30s
 
   redis:
-    image: docker.io/valkey/valkey:8-bookworm@sha256:fea8b3e67b15729d4bb70589eb03367bab9ad1ee89c876f54327fc7c6e618571
+    image: docker.io/valkey/valkey:9@sha256:c123e3715db63d06d4ad6964884037aa0d5d4d703939b9929954112889708e1d
     healthcheck:
       test: redis-cli ping || exit 1
       interval: 10s
@@ -165,7 +165,7 @@ services:
       retries: 10
 
   immich-server:
-    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-v2.3.0}
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-v3.1.0}
     environment:
       DB_HOSTNAME: database
       DB_USERNAME: postgres

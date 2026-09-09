@@ -59,6 +59,10 @@ infra/
 
 ## Running the playbook
 
+> **On Windows?** Ansible has no Windows control node. Follow
+> [`docs/WINDOWS-DEPLOY.md`](docs/WINDOWS-DEPLOY.md), which runs Ansible on the
+> VM itself using only the SSH client Windows already ships.
+
 ```bash
 cd infra/ansible
 cp inventory.example.ini inventory.ini      # then edit

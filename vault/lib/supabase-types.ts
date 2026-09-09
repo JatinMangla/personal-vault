@@ -64,6 +64,14 @@ export interface MetricsPayload {
     /** Whole-disk figure from Immich's API. NEVER display as "Immich usage". */
     api_disk_figure: number;
     failed_jobs: number;
+    /**
+     * False when the Immich API could not be reached or its response schema
+     * did not match. Without this, an API change is indistinguishable from
+     * "you have zero photos" - the counts below would simply read 0.
+     * Older samples predate this field, hence optional.
+     */
+    api_ok?: boolean;
+    api_warning?: string;
   };
   backup: {
     last_backup_ts: number;
