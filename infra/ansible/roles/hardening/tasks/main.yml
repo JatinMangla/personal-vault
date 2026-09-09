@@ -173,42 +173,56 @@
     # Required for Tailscale subnet routing and for container networking.
     - { name: net.ipv4.ip_forward, value: '1' }
 
-- name: Ensure a swap file exists
-  # 12 GB is comfortable but ML jobs plus Postgres can spike. A modest swap file
-  # turns a potential OOM kill (which would interrupt an upload) into a slowdown.
-  ansible.builtin.command:
-    cmd: fallocate -l 2G /swapfile
-    creates: /swapfile
+# Swap: 12 GB is comfortable, but ML jobs plus Postgres can spike. A modest
+# swap file turns a potential OOM kill (which would interrupt an upload) into a
+# slowdown.
+#
+# Everything below is gated on swap not already being active. An earlier version
+# tried to make `mkswap` tolerant by matching its error text, which is brittle -
+# it matched "Device or resource busy" while mkswap actually says "is mounted;
+# will not make swapspace", so every re-run of the playbook failed here. Testing
+# the state directly is both simpler and correct.
 
-- name: Secure the swap file permissions
-  ansible.builtin.file:
-    path: /swapfile
-    owner: root
-    group: root
-    mode: '0600'
-
-- name: Format the swap file
+- name: Check whether swap is already active
   ansible.builtin.command:
-    cmd: mkswap /swapfile
-  register: mkswap_result
-  changed_when: "'Setting up swapspace' in mkswap_result.stdout"
-  failed_when:
-    - mkswap_result.rc != 0
-    - "'Device or resource busy' not in mkswap_result.stderr"
+    cmd: swapon --noheadings --show=NAME
+  register: active_swap
+  changed_when: false
+  failed_when: false
+
+- name: Set up the swap file
+  when: "'/swapfile' not in active_swap.stdout"
+  block:
+    - name: Allocate the swap file
+      ansible.builtin.command:
+        cmd: fallocate -l 2G /swapfile
+        creates: /swapfile
+
+    - name: Secure the swap file permissions
+      # Must be 0600 before mkswap, or mkswap warns and swapon refuses.
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Format the swap file
+      ansible.builtin.command:
+        cmd: mkswap /swapfile
+      register: mkswap_result
+      changed_when: "'Setting up swapspace' in mkswap_result.stdout"
+
+    - name: Activate swap now
+      ansible.builtin.command:
+        cmd: swapon /swapfile
+      changed_when: true
 
 - name: Enable the swap file at boot
+  # Outside the block: the fstab entry must exist even when swap was already
+  # active but had not been persisted.
   ansible.posix.mount:
     name: none
     src: /swapfile
     fstype: swap
     opts: sw
     state: present
-
-- name: Activate swap now
-  ansible.builtin.command:
-    cmd: swapon /swapfile
-  register: swapon_result
-  changed_when: swapon_result.rc == 0
-  failed_when:
-    - swapon_result.rc != 0
-    - "'already active' not in swapon_result.stderr"

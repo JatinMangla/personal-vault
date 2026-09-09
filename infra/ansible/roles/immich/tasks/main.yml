@@ -164,6 +164,32 @@
     chdir: "{{ immich_dir }}"
   register: compose_up
   changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+  failed_when: false
+
+- name: Show container logs if the stack did not start
+  # "container X is unhealthy" says nothing about WHY. Without this you have to
+  # know to run `docker logs` yourself; the answer is almost always in there.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      for c in immich_postgres immich_redis immich_server immich_machine_learning; do
+        echo "===== $c ====="
+        docker logs --tail 25 "$c" 2>&1 || echo "(container not created)"
+      done
+    executable: /bin/bash
+  register: container_logs
+  changed_when: false
+  when: compose_up.rc != 0
+
+- name: Fail with the container logs attached
+  ansible.builtin.fail:
+    msg: |
+      The Immich stack did not start.
+
+      {{ compose_up.stderr }}
+
+      {{ container_logs.stdout | default('no logs captured') }}
+  when: compose_up.rc != 0
 
 - name: Wait for the Immich API to answer
   ansible.builtin.uri:
