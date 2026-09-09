@@ -90,28 +90,48 @@ services:
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_DB: ${DB_DATABASE_NAME}
       POSTGRES_INITDB_ARGS: '--data-checksums'
-      # Immich's own automatic database dumps land in UPLOAD_LOCATION/backups,
-      # which the restic job then captures in the same snapshot as the media.
-      DB_STORAGE_TYPE: 'HDD'
     volumes:
       - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
-      # Tuning for 12 GB RAM. See infra/postgres/tuning.conf for the rationale.
-      - ./postgres/tuning.conf:/etc/postgresql/conf.d/tuning.conf:ro
     shm_size: 256mb
     restart: always
     security_opt:
       - no-new-privileges:true
+    # Use the image's own healthcheck. Immich's Postgres image ships one that
+    # understands its vector extensions; overriding it with a bare pg_isready
+    # tests less, not more.
     healthcheck:
-      test: >-
-        pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" || exit 1
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 60s
+      disable: false
+    # Tuning for 12 GB RAM, passed as command-line flags.
+    #
+    # An earlier version of this file mounted postgres/tuning.conf and pointed
+    # `-c config_file=` at /etc/postgresql/postgresql.conf. That is a Debian
+    # layout path which does NOT exist in this image, so Postgres exited
+    # immediately and the container never became healthy. Immich's own compose
+    # file overrides no command at all.
+    #
+    # Flags are applied after the image's defaults and need no file to exist,
+    # so the tuning survives without depending on the image's directory layout.
+    # See infra/postgres/tuning.conf for the reasoning behind each value.
     command: >-
       postgres
-      -c config_file=/etc/postgresql/postgresql.conf
-      -c include_dir=/etc/postgresql/conf.d
+      -c shared_buffers=3GB
+      -c effective_cache_size=8GB
+      -c work_mem=32MB
+      -c maintenance_work_mem=512MB
+      -c max_wal_size=2GB
+      -c min_wal_size=512MB
+      -c wal_compression=on
+      -c checkpoint_completion_target=0.9
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_worker_processes=4
+      -c max_parallel_workers=2
+      -c max_parallel_workers_per_gather=1
+      -c max_parallel_maintenance_workers=1
+      -c max_connections=50
+      -c autovacuum_max_workers=2
+      -c autovacuum_naptime=30s
+      -c log_min_duration_statement=2000
 
 volumes:
   model-cache:

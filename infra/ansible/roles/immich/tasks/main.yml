@@ -128,14 +128,11 @@
     mode: '0640'
   notify: Restart immich
 
-- name: Install the Postgres tuning file
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../postgres/tuning.conf"
-    dest: "{{ immich_dir }}/postgres/tuning.conf"
-    owner: "{{ immich_user }}"
-    group: "{{ immich_user }}"
-    mode: '0640'
-  notify: Restart immich
+# The tuning values are passed as `-c` flags in docker-compose.yml rather than
+# mounted as a file: the file approach needed `-c config_file=` pointing at a
+# Debian path that does not exist in Immich's Postgres image, which stopped the
+# container from starting at all. postgres/tuning.conf is kept as the reference
+# for why each value was chosen.
 
 - name: Render the environment file
   # 0600: contains DB_PASSWORD. Never world-readable, never committed.
