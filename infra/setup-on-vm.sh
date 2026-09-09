@@ -93,7 +93,10 @@ cd "$REPO_DIR/infra/ansible"
 } > inventory.ini
 ok "inventory configured for local execution"
 
-ansible-galaxy collection install -r requirements.yml >/dev/null 2>&1 \
+# --force so a previously-installed, too-new collection is replaced. Without it
+# an existing community.general 12.x stays put and the playbook fails with a
+# removed-plugin error on Ubuntu 24.04's ansible-core 2.16.
+ansible-galaxy collection install --force -r requirements.yml >/dev/null 2>&1 \
   && ok "galaxy collections installed" \
   || warn "collection install reported a problem; continuing"
 
