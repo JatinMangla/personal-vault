@@ -11,18 +11,39 @@
 
 # --- Block volume ---------------------------------------------------------
 
-- name: Check whether the block device is present
+- name: Look for the Oracle-managed device symlink
   ansible.builtin.stat:
-    path: "{{ block_device }}"
-  register: block_dev
+    path: "{{ block_device_preferred }}"
+  register: block_dev_preferred
+
+- name: Look for the raw device
+  ansible.builtin.stat:
+    path: "{{ block_device_fallback }}"
+  register: block_dev_fallback
 
 - name: Fail with guidance if the block volume is missing
   ansible.builtin.fail:
     msg: >-
-      Block device {{ block_device }} not found. Attach the 150 GB block volume
-      in the OCI console (Lower Cost / 0 VPU), then run the iSCSI attach
-      commands the console provides. See infra/docs/volume-layout.md.
-  when: not block_dev.stat.exists
+      Neither {{ block_device_preferred }} nor {{ block_device_fallback }} was
+      found. Attach the 150 GB block volume in the OCI console
+      (Lower Cost / 0 VPU), then run the iSCSI attach commands the console
+      provides. See infra/docs/volume-layout.md.
+  when:
+    - not block_dev_preferred.stat.exists
+    - not block_dev_fallback.stat.exists
+
+- name: Select the device path to use
+  # Prefer the Oracle symlink when it exists: it is stable across reboots,
+  # whereas /dev/sdX ordering is not guaranteed. The filesystem is mounted by
+  # LABEL regardless, so this only affects formatting.
+  ansible.builtin.set_fact:
+    block_device: >-
+      {{ block_device_preferred if block_dev_preferred.stat.exists
+         else block_device_fallback }}
+
+- name: Report the device in use
+  ansible.builtin.debug:
+    msg: "Using block device {{ block_device }}"
 
 - name: Read the filesystem on the block device
   ansible.builtin.command:
@@ -49,7 +70,10 @@
     # pure waste on a media library and costs block-volume write bandwidth.
     # nofail: a missing volume must not stop the host from booting, or a bad
     # attach leaves the box unreachable.
-    opts: defaults,noatime,nofail
+    # _netdev: this is an iSCSI volume, so systemd must wait for the network
+    # before mounting. Oracle's console warns that omitting it makes reboots
+    # fail. Required, not optional, for a network-attached device.
+    opts: defaults,noatime,nofail,_netdev
     state: mounted
 
 - name: Create the Immich media subdirectories

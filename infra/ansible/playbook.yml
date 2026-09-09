@@ -26,7 +26,13 @@
     immich_dir: /opt/immich
     media_mount: /mnt/media
     db_data_location: /var/lib/immich/postgres
-    block_device: /dev/oracleoci/oraclevdb
+    # Oracle exposes the block volume at /dev/oracleoci/oraclevdb only when the
+    # Block Volume Management plugin is enabled on the instance. That plugin
+    # cannot always be turned on (it is absent from some console layouts), in
+    # which case the volume is a plain /dev/sdb. Detected at run time below
+    # rather than assumed, so both paths work.
+    block_device_preferred: /dev/oracleoci/oraclevdb
+    block_device_fallback: /dev/sdb
 
   pre_tasks:
     - name: Verify the target is ARM64

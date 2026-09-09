@@ -44,10 +44,19 @@ fi
 
 # All media lives on the block volume. Without it, Immich fills the 50 GB boot
 # disk and takes the whole host down.
-[[ -e /dev/oracleoci/oraclevdb ]] || die "Block volume not found at /dev/oracleoci/oraclevdb.
+#
+# /dev/oracleoci/oraclevdb only exists when the Block Volume Management plugin
+# is enabled, which is not always possible from the console. Accept the raw
+# device too - the playbook detects whichever is present.
+if [[ -e /dev/oracleoci/oraclevdb ]]; then
+  ok "block volume present at /dev/oracleoci/oraclevdb"
+elif [[ -b /dev/sdb ]]; then
+  ok "block volume present at /dev/sdb (Oracle symlink absent - fine)"
+else
+  die "No block volume found at /dev/oracleoci/oraclevdb or /dev/sdb.
   Attach the 150 GB volume in the OCI console (Lower Cost / 0 VPU), then run the
-  iSCSI commands the console gives you. See infra/docs/oracle-setup.md."
-ok "block volume present"
+  iSCSI connect commands the console gives you. See infra/docs/oracle-setup.md."
+fi
 
 bold "2/7  Fetching the repository"
 
