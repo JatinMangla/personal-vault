@@ -1,0 +1,104 @@
+name: security-scan
+
+# Weekly secret and dependency scan, plus on every push.
+#
+# gitleaks runs over the FULL HISTORY, not just the working tree. A secret that
+# was committed and then removed is still in the history and still compromised;
+# only a scan with history depth will find it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays 04:00 UTC (09:30 IST).
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history. Depth 1 would miss a secret in an earlier commit,
+          # which is exactly the case that matters.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Secret-blocking hook regression suite
+        # A silently broken hook is the same as no hook, so its own tests run
+        # in CI rather than being trusted to have been run by hand.
+        run: bash .claude/hooks/__tests__/test-block-secrets.sh
+
+      - name: Check .gitignore covers the sensitive patterns
+        run: |
+          set -euo pipefail
+          missing=0
+          for pattern in '.env' '*.pem' '*.key' 'secrets/' '*.tfvars'; do
+            if ! grep -qF -- "$pattern" .gitignore; then
+              echo "MISSING from .gitignore: $pattern"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] && echo ".gitignore covers all required patterns"
+          exit "$missing"
+
+      - name: Assert no NEXT_PUBLIC_ variable holds a secret
+        run: |
+          set -euo pipefail
+          # NEXT_PUBLIC_ variables are inlined into the browser bundle. A
+          # secret-sounding name with that prefix is a leak by construction.
+          if grep -rnE 'NEXT_PUBLIC_[A-Z_]*(SECRET|PRIVATE|SERVICE_ROLE|ACCESS_KEY)' \
+               --include='*.ts' --include='*.tsx' --include='*.json' \
+               --include='*.example' vault/ 2>/dev/null; then
+            echo "BLOCKER: a NEXT_PUBLIC_ variable appears to hold a secret"
+            exit 1
+          fi
+          echo "No secret-shaped NEXT_PUBLIC_ variables found"
+
+  dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vault/package-lock.json
+
+      - name: npm audit
+        working-directory: vault
+        # High and critical fail the build. Moderate findings are reported and
+        # triaged in vault/SECURITY-NOTES.md with their reachability, rather
+        # than being silenced or ignored.
+        run: |
+          npm ci
+          npm audit --audit-level=high
+
+  shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        # These scripts run unattended on a remote box; a bug surfaces as a
+        # silently failing timer, which is the failure mode backups are most
+        # vulnerable to.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S warning ops/backup/*.sh ops/metrics/*.sh .claude/hooks/*.sh
