@@ -50,22 +50,49 @@ export default function FilesPage() {
   // --- Session -------------------------------------------------------------
 
   useEffect(() => {
-    const supabase = browserClient();
     void (async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      // Every path through this MUST clear checkingSession. Without the
+      // try/finally, an unreachable Supabase (network blip, bad URL, DNS
+      // failure) leaves the page showing "Loading..." forever with no
+      // explanation, which is indistinguishable from the app being broken.
+      try {
+        const supabase = browserClient();
+        const { data, error } = await supabase.auth.getUser();
 
-      if (user) {
+        if (error) {
+          // A missing session is normal and not worth surfacing; anything else
+          // is a real connectivity or configuration problem the user should see.
+          if (error.name !== 'AuthSessionMissingError') {
+            setStatus(`Could not reach the server: ${error.message}`);
+          }
+          return;
+        }
+
+        const user = data.user;
+        if (!user) return;
+
         setUserId(user.id);
-        const { data } = await supabase
+
+        const { data: keys, error: keyError } = await supabase
           .from('user_keys')
           .select('kdf_salt, kdf_iterations, passphrase_verifier')
           .eq('user_id', user.id)
           .maybeSingle();
-        setKeyMaterial((data as KeyMaterial | null) ?? null);
+
+        if (keyError) {
+          setStatus(`Could not load your vault settings: ${keyError.message}`);
+          return;
+        }
+        setKeyMaterial((keys as KeyMaterial | null) ?? null);
+      } catch (err) {
+        setStatus(
+          err instanceof Error
+            ? `Could not reach the server: ${err.message}`
+            : 'Could not reach the server.',
+        );
+      } finally {
+        setCheckingSession(false);
       }
-      setCheckingSession(false);
     })();
   }, []);
 
@@ -171,7 +198,13 @@ export default function FilesPage() {
     return (
       <>
         <h1>Personal Vault</h1>
-        <p className="muted">Sign in to access your documents.</p>
+        {status ? (
+          <div className="banner banner-red" role="alert">
+            {status}
+          </div>
+        ) : (
+          <p className="muted">Sign in to access your documents.</p>
+        )}
         <a className="btn btn-primary" href="/login">
           Sign in
         </a>

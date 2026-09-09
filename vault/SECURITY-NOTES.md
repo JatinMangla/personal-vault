@@ -152,3 +152,55 @@ the `<userId>/<random>` object-key format. These are defence in depth: the API
 routes already check ownership before signing. They matter because a signed URL
 is a bearer credential, and if one leaked the policies still confine what a
 normal authenticated session can reach. The `anon` role is granted nothing.
+
+## CSP: why a per-request nonce
+
+The deployed CSP is generated in `proxy.ts`, not `vercel.json`, because it
+contains a value that changes on every request.
+
+**The bug this fixes.** Next.js emits two inline `<script>` blocks on every
+page — the React Flight payload that hydration reads. A static
+`script-src 'self'` blocks them, React never hydrates, and every page sits at
+"Loading…" forever with React error #412 in the console. This shipped to
+production and was caught by the user, not by the test suite.
+
+**Why the obvious fixes do not work:**
+
+| Approach | Why not |
+|---|---|
+| `'unsafe-inline'` | Re-opens the XSS hole the CSP exists to close; spec forbids it |
+| Script hashes | The Flight payload differs per page and per build |
+| Subresource Integrity | Tested: Next adds `integrity` only to *external* scripts, never the inline payload |
+
+**The fix.** `proxy.ts` generates a CSPRNG nonce per request, puts it in the CSP
+header, and Next stamps the same value onto the scripts it emits. An injected
+script cannot guess it. Verified: header nonce and script nonce match, rotate
+per request, and `script-src` still contains neither `unsafe-inline` nor
+`unsafe-eval`.
+
+**The cost, accepted.** Nonces require dynamic rendering — a statically
+prerendered page is built with no request, so no nonce can be applied. The root
+layout therefore calls `connection()`, which opts every page into dynamic
+rendering. Static caching is lost. For a single-user vault of tiny pages this is
+irrelevant: Vercel's free tier allows 1M invocations a month against an expected
+handful per day.
+
+### `upgrade-insecure-requests` is skipped on localhost
+
+That directive rewrites `http://` subresource URLs to `https://`. Correct in
+production, but against a local test server with no TLS it makes every asset
+fail with an SSL error. WebKit applies it to `127.0.0.1`; Chromium exempts
+localhost. The symptom was baffling — pages rendered completely unstyled because
+the stylesheet never loaded, and 21 WebKit tests failed while Chromium passed.
+
+Production is HTTPS-only on Vercel, so skipping it locally costs nothing.
+
+### Test gap that let this reach production
+
+The responsive suite passed throughout, because it measured geometry and never
+asked whether the application actually ran. Five regression tests now cover it:
+no CSP violations in console, the app hydrates rather than showing "Loading…",
+every inline script carries the matching nonce, the nonce is unique per request,
+and `script-src` still forbids `unsafe-inline`/`unsafe-eval`.
+
+**Lesson worth keeping: a layout test that passes on a dead page is not a test.**

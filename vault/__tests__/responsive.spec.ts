@@ -235,3 +235,101 @@ test.describe('PWA', () => {
     expect(source).toContain('self.location.origin');
   });
 });
+
+// ---------------------------------------------------------------------------
+
+test.describe('hydration and CSP', () => {
+  /**
+   * REGRESSION GUARD. A strict `script-src 'self'` blocked Next's two inline
+   * hydration scripts in production: React never hydrated and every page sat at
+   * "Loading..." forever. The layout tests above all PASSED throughout, because
+   * they only measured geometry and never asked whether the app actually ran.
+   *
+   * These tests fail if that recurs.
+   */
+
+  test('no CSP violations are reported on any page', async ({ page }) => {
+    const violations: string[] = [];
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (/Content Security Policy|violates the following/i.test(text)) {
+        violations.push(text.slice(0, 160));
+      }
+    });
+
+    for (const route of PUBLIC_ROUTES) {
+      await page.goto(route);
+      await page.waitForLoadState('networkidle');
+    }
+
+    expect(violations, `CSP blocked something: ${JSON.stringify(violations)}`).toEqual([]);
+  });
+
+  test('the app hydrates rather than hanging on Loading', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message.slice(0, 200)));
+
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+
+    // React error #412 is the hydration failure this guards against.
+    expect(
+      errors.filter((e) => /Minified React error #4(18|22|23|25|12)/.test(e)),
+      `React hydration errors: ${JSON.stringify(errors)}`,
+    ).toEqual([]);
+
+    // The client decides what to render once hydrated. If it is still showing
+    // the server-rendered placeholder after settling, hydration did not happen.
+    const body = (await page.locator('body').textContent()) ?? '';
+    expect(
+      body.includes('Loading…') || body.includes('Loading...'),
+      'page is still showing "Loading" after networkidle - it did not hydrate',
+    ).toBe(false);
+  });
+
+  test('every inline script carries the CSP nonce', async ({ page }) => {
+    const response = await page.goto('/');
+    const html = (await response?.text()) ?? '';
+
+    const csp = response?.headers()['content-security-policy'] ?? '';
+    const headerNonce = /'nonce-([^']+)'/.exec(csp)?.[1];
+    expect(headerNonce, 'no nonce in the CSP header').toBeTruthy();
+
+    // Inline scripts are those with content and no src attribute.
+    const inline = [...html.matchAll(/<script(?![^>]*src=)([^>]*)>([\s\S]*?)<\/script>/g)]
+      .filter((m) => (m[2] ?? '').trim().length > 0);
+
+    expect(inline.length, 'expected Next to emit inline hydration scripts').toBeGreaterThan(0);
+
+    for (const [, attrs] of inline) {
+      expect(
+        attrs?.includes(`nonce="${headerNonce}"`),
+        `inline script missing the matching nonce: ${attrs}`,
+      ).toBe(true);
+    }
+  });
+
+  test('the nonce is unique per request', async ({ page }) => {
+    const nonceOf = async () => {
+      const res = await page.goto('/');
+      const csp = res?.headers()['content-security-policy'] ?? '';
+      return /'nonce-([^']+)'/.exec(csp)?.[1];
+    };
+    const first = await nonceOf();
+    const second = await nonceOf();
+
+    expect(first).toBeTruthy();
+    expect(first, 'nonce is being reused across requests, which defeats it').not.toBe(second);
+  });
+
+  test('CSP still forbids unsafe-inline and unsafe-eval for scripts', async ({ page }) => {
+    const response = await page.goto('/');
+    const csp = response?.headers()['content-security-policy'] ?? '';
+
+    const scriptSrc = /script-src([^;]*)/.exec(csp)?.[1] ?? '';
+    expect(scriptSrc, 'script-src must not allow unsafe-inline').not.toContain("'unsafe-inline'");
+    expect(scriptSrc, 'script-src must not allow unsafe-eval').not.toContain("'unsafe-eval'");
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+  });
+});

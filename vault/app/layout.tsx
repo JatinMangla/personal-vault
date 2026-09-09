@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { connection } from 'next/server';
 import './globals.css';
 import { VaultKeyProvider } from '@/components/VaultKeyProvider';
 import { BottomNav } from '@/components/BottomNav';
@@ -41,7 +42,22 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/**
+ * Force dynamic rendering.
+ *
+ * The CSP nonce in proxy.ts is generated per request, and Next can only stamp
+ * it onto its inline hydration scripts while rendering a real request. A
+ * statically prerendered page is built once with no request, so its scripts
+ * carry no nonce, the CSP blocks them, and the page hangs at "Loading..."
+ * forever (React error #412) - which is exactly what shipped to production.
+ *
+ * Doing this in the root layout covers every page at once. The cost is no
+ * static caching, which is irrelevant for a single-user vault of tiny pages.
+ */
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Wait for an incoming request, so a nonce exists to apply.
+  await connection();
+
   return (
     <html lang="en">
       <body>
