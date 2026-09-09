@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the Immich backup nightly at 03:00
+Documentation=file:///opt/personal-vault/ops/README.md
+
+[Timer]
+# 03:00 local time, one hour after Immich's 02:00 database dump, so every
+# snapshot captures a fresh dump alongside the media it describes.
+OnCalendar=*-*-* 03:00:00
+
+# Spread load slightly and avoid hitting the backup target at the exact same
+# second every night.
+RandomizedDelaySec=300
+
+# If the machine was off at 03:00, run on the next boot rather than skipping
+# a night silently.
+Persistent=true
+
+Unit=immich-backup.service
+
+[Install]
+WantedBy=timers.target

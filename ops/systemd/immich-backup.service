@@ -1,0 +1,42 @@
+[Unit]
+Description=Immich nightly backup to Gozunga via restic
+Documentation=file:///opt/personal-vault/ops/README.md
+# Needs the media volume mounted and the network up. Without the RequiresMountsFor
+# line a failed volume attach would let the job run against an empty directory.
+RequiresMountsFor=/mnt/media
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/personal-vault/ops/backup/immich-backup.sh
+
+# restic is I/O and CPU heavy. On 2 ARM cores, deprioritise it so a backup
+# running at 03:00 cannot make the server unresponsive to a phone uploading
+# from a different timezone.
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+IOWeight=20
+
+# A backup that hangs must not block the next night's run.
+TimeoutStartSec=6h
+
+# Hardening. The job needs to read /mnt/media, write /var/lib/personal-vault,
+# and reach the network. Nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/personal-vault /tmp
+ReadOnlyPaths=/mnt/media
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

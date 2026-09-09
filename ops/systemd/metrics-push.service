@@ -1,0 +1,32 @@
+[Unit]
+Description=Collect and push host metrics to the vault dashboard
+Documentation=file:///opt/personal-vault/ops/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/personal-vault/ops/metrics/collect-and-push.sh
+
+# Must finish well inside the 15-minute interval. If it cannot, the dashboard
+# staleness banner is the correct signal - not a pile of overlapping runs.
+TimeoutStartSec=5m
+
+# Read-mostly: the collector must never mutate Immich, the database or the
+# restic repository.
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/personal-vault
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

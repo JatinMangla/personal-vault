@@ -1,0 +1,17 @@
+[Unit]
+Description=Push host metrics every 15 minutes
+Documentation=file:///opt/personal-vault/ops/README.md
+
+[Timer]
+# Every 15 minutes. The dashboard's staleness thresholds are built around this
+# interval: amber at 30 min, red at 2 h. Changing it here means changing
+# vault/lib/thresholds.ts too.
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+# Not Persistent: a missed metrics sample is worthless after the fact, unlike a
+# missed backup. Catching up would only push stale numbers.
+Unit=metrics-push.service
+
+[Install]
+WantedBy=timers.target
