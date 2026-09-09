@@ -23,6 +23,15 @@ import {
   type VaultFile,
 } from '@/lib/transfer';
 import { formatBytes } from '@/lib/thresholds';
+import {
+  bytesToBase64,
+  deriveExtractableKey,
+  generateRecoveryCode,
+  generateSalt,
+  wrapKeyWithRecoveryCode,
+  PBKDF2_ITERATIONS,
+} from '@/lib/crypto';
+import { createVerifier } from '@/components/VaultKeyProvider';
 
 interface KeyMaterial {
   kdf_salt: string;
@@ -46,6 +55,7 @@ export default function FilesPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
 
   // --- Session -------------------------------------------------------------
 
@@ -118,6 +128,71 @@ export default function FilesPage() {
   }, [isUnlocked, loadFiles]);
 
   // --- Actions -------------------------------------------------------------
+
+  /**
+   * Create key material for a signed-in account that has none.
+   *
+   * An account can exist without a vault: with email confirmation enabled,
+   * signUp() returns no session, so the RLS-protected insert cannot run at that
+   * moment. Such a user lands here already signed in, and previously the only
+   * advice was "visit /login to create one" - which does nothing when you are
+   * already authenticated. That was a loop with no exit.
+   */
+  const handleCreateVault = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!userId) return;
+    if (passphrase.length < 12) {
+      setStatus('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    setStatus(null);
+    try {
+      const supabase = browserClient();
+
+      // Never overwrite an existing row: a new salt would orphan every file
+      // already encrypted under the old one.
+      const { data: existing } = await supabase
+        .from('user_keys')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (existing) {
+        setStatus('A vault already exists for this account. Reload the page.');
+        return;
+      }
+
+      const salt = generateSalt();
+      const code = generateRecoveryCode();
+      const extractable = await deriveExtractableKey(passphrase, salt);
+
+      const [wrapped, verifier] = await Promise.all([
+        wrapKeyWithRecoveryCode(extractable, code, salt),
+        createVerifier(extractable),
+      ]);
+
+      const { error: insertError } = await supabase.from('user_keys').insert({
+        user_id: userId,
+        kdf_salt: bytesToBase64(salt),
+        kdf_iterations: PBKDF2_ITERATIONS,
+        recovery_wrapped_key: wrapped,
+        passphrase_verifier: verifier,
+      });
+      if (insertError) throw insertError;
+
+      // Shown once. Surface it before unlocking so it cannot be missed.
+      setNewRecoveryCode(code);
+      setKeyMaterial({
+        kdf_salt: bytesToBase64(salt),
+        kdf_iterations: PBKDF2_ITERATIONS,
+        passphrase_verifier: verifier,
+      });
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Could not create the vault.');
+    } finally {
+      setPassphrase('');
+    }
+  };
 
   const handleUnlock = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -212,6 +287,73 @@ export default function FilesPage() {
     );
   }
 
+  // Recovery code is shown exactly once, immediately after the vault is created.
+  if (newRecoveryCode) {
+    return (
+      <>
+        <h1>Save your recovery code</h1>
+        <div className="banner banner-red">
+          <strong>This is shown once and cannot be retrieved later.</strong>
+        </div>
+        <p>Write it down and keep it somewhere safe, away from this device.</p>
+        <p className="mono card recovery-code">{newRecoveryCode}</p>
+        <div className="banner banner-amber">
+          If you lose <strong>both</strong> your passphrase and this code, your files
+          cannot be decrypted by anyone — including us. That is how end-to-end
+          encryption works, and it is why this warning is here.
+        </div>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => setNewRecoveryCode(null)}
+        >
+          I have saved it
+        </button>
+      </>
+    );
+  }
+
+  // No key material yet: this account was created but never provisioned. Offer
+  // to set it up here rather than sending the user to /login, which does
+  // nothing when they are already signed in.
+  if (!keyMaterial) {
+    return (
+      <>
+        <h1>Set up your vault</h1>
+        <p className="muted">
+          Choose the passphrase that will encrypt your files. It never leaves this
+          browser, and it is separate from your account password.
+        </p>
+        <form onSubmit={handleCreateVault} className="stack w-full-form">
+          <div>
+            <label htmlFor="new-passphrase">Encryption passphrase</label>
+            <input
+              id="new-passphrase"
+              type="password"
+              autoComplete="new-password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              required
+              minLength={12}
+            />
+            <p className="faint">
+              At least 12 characters. Four random words works well and is easier to
+              type on a phone than one long string.
+            </p>
+          </div>
+          <button type="submit" className="btn-primary">
+            Create vault
+          </button>
+          {status && (
+            <div className="banner banner-red" role="alert">
+              {status}
+            </div>
+          )}
+        </form>
+      </>
+    );
+  }
+
   if (!isUnlocked) {
     return (
       <>
@@ -232,19 +374,13 @@ export default function FilesPage() {
               required
             />
           </div>
-          <button type="submit" className="btn-primary" disabled={isDeriving || !keyMaterial}>
+          <button type="submit" className="btn-primary" disabled={isDeriving}>
             {isDeriving ? 'Deriving key…' : 'Unlock'}
           </button>
           {keyError && (
             <div className="banner banner-red" role="alert">
               {keyError}
             </div>
-          )}
-          {!keyMaterial && (
-            <p className="faint">
-              No vault has been set up for this account yet. Visit{' '}
-              <a href="/login">setup</a> to create one.
-            </p>
           )}
         </form>
       </>
