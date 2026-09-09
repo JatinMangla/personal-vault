@@ -1,0 +1,51 @@
+# ---- Secrets: never commit ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+*.tfvars
+*.tfstate
+*.tfstate.*
+.restic-pass
+*.kubeconfig
+id_rsa*
+*.ovpn
+authorized_keys
+
+# ---- Node / Next ----
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.vercel/
+.turbo/
+
+# ---- Test artifacts ----
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# ---- Ansible ----
+*.retry
+inventory.ini
+!inventory.example.ini
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ---- Local Claude overrides ----
+.claude/settings.local.json
