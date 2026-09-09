@@ -35,6 +35,56 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recoveryCode, setRecoveryCode] = useState<string | null>(null);
+  const [pendingSetup, setPendingSetup] = useState(false);
+
+  /**
+   * Create the key material for an account that has none.
+   *
+   * Needed because an account can exist without a vault: with email
+   * confirmation enabled, signUp() returns no session, so the RLS-protected
+   * insert cannot run at that moment. Without this path such an account is
+   * permanently unusable - it can sign in but never unlock.
+   */
+  const provisionVault = async (
+    supabase: ReturnType<typeof browserClient>,
+    userId: string,
+  ): Promise<string | null> => {
+    const { data: existing } = await supabase
+      .from('user_keys')
+      .select('user_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Already provisioned. Never overwrite - that would orphan every file
+    // encrypted under the previous salt.
+    if (existing) return null;
+
+    if (!passphrase || passphrase.length < 12) {
+      throw new Error(
+        'This account has no vault yet. Enter your encryption passphrase (12+ characters) to finish setting it up.',
+      );
+    }
+
+    const salt = generateSalt();
+    const code = generateRecoveryCode();
+    const extractable = await deriveExtractableKey(passphrase, salt);
+
+    const [wrapped, verifier] = await Promise.all([
+      wrapKeyWithRecoveryCode(extractable, code, salt),
+      createVerifier(extractable),
+    ]);
+
+    const { error: keyError } = await supabase.from('user_keys').insert({
+      user_id: userId,
+      kdf_salt: bytesToBase64(salt),
+      kdf_iterations: PBKDF2_ITERATIONS,
+      recovery_wrapped_key: wrapped,
+      passphrase_verifier: verifier,
+    });
+    if (keyError) throw keyError;
+
+    return code;
+  };
 
   const handleSignIn = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -42,8 +92,22 @@ export default function LoginPage() {
     setError(null);
     try {
       const supabase = browserClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
       if (signInError) throw signInError;
+
+      const user = data.user;
+      if (!user) throw new Error('Sign in returned no account.');
+
+      // Finish setup if this account never got its key material.
+      const code = await provisionVault(supabase, user.id);
+      if (code) {
+        setRecoveryCode(code);
+        return;
+      }
+
       router.push('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed');
@@ -64,7 +128,19 @@ export default function LoginPage() {
       if (signUpError) throw signUpError;
 
       const user = data.user;
-      if (!user) throw new Error('Check your email to confirm the account, then sign in.');
+      if (!user) throw new Error('Sign up did not return an account. Try again.');
+
+      // With email confirmation enabled, signUp() returns a user but NO session,
+      // so the RLS-protected insert below would fail. Detect that and tell the
+      // user plainly rather than leaving a half-created account: previously this
+      // path threw before writing any key material, so the account existed with
+      // no vault attached and no way to finish setting it up.
+      if (!data.session) {
+        setPendingSetup(true);
+        throw new Error(
+          'Account created. Confirm your email, then sign in here to finish setting up your vault.',
+        );
+      }
 
       // Derive an extractable key ONLY so it can be wrapped under the recovery
       // code. The key used for day-to-day encryption is derived separately and
@@ -156,7 +232,7 @@ export default function LoginPage() {
           />
         </div>
 
-        {isSignUp && (
+        {(isSignUp || pendingSetup) && (
           <div>
             <label htmlFor="passphrase">Encryption passphrase</label>
             <input
@@ -171,6 +247,9 @@ export default function LoginPage() {
             <p className="faint">
               Separate from your account password, and never sent to the server. It
               encrypts your files in this browser.
+              {pendingSetup && !isSignUp
+                ? ' Your account exists but has no vault yet — signing in with this will finish setting it up.'
+                : ''}
             </p>
           </div>
         )}
