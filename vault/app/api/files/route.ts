@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { serverClient } from '@/lib/supabase-server';
-import { deleteObject, R2_QUOTA_BYTES } from '@/lib/r2';
+import { deleteObject, STORAGE_QUOTA_BYTES } from '@/lib/storage';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -48,7 +48,7 @@ export async function GET() {
   return NextResponse.json(
     {
       files: data ?? [],
-      quota: { used: typeof usedBytes === 'number' ? usedBytes : 0, limit: R2_QUOTA_BYTES },
+      quota: { used: typeof usedBytes === 'number' ? usedBytes : 0, limit: STORAGE_QUOTA_BYTES },
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );
@@ -91,7 +91,7 @@ export async function POST(request: Request) {
 
   const { objectKey, encryptedMetadata, encryptedManifest, filenameHash, sizeBytes } = body;
 
-  if (typeof objectKey !== 'string' || !objectKey.startsWith(`u/${user.id}/`)) {
+  if (typeof objectKey !== 'string' || !objectKey.startsWith(`${user.id}/`)) {
     return NextResponse.json(
       { error: 'objectKey must be within the user namespace' },
       { status: 403 },

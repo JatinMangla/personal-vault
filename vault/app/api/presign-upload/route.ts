@@ -1,9 +1,9 @@
 /**
  * POST /api/presign-upload
  *
- * Authenticates the user, checks the quota, and mints a 60-second presigned PUT.
- * The browser then uploads ciphertext DIRECTLY to R2 — bytes never pass through
- * this function.
+ * Authenticates the user, checks the quota, and mints a signed upload URL.
+ * The browser then uploads ciphertext DIRECTLY to Supabase Storage — bytes
+ * never pass through this function.
  *
  * This route sees: a size, a content type, and a filename hash. It never sees
  * the filename, the file contents, or the encryption key.
@@ -12,11 +12,12 @@
 import { NextResponse } from 'next/server';
 import { serverClient } from '@/lib/supabase-server';
 import {
-  presignUpload,
-  R2_QUOTA_BYTES,
+  createSignedUpload,
+  STORAGE_QUOTA_BYTES,
+  STORAGE_SOFT_LIMIT_BYTES,
   MAX_SINGLE_UPLOAD_BYTES,
-  PRESIGN_TTL_SECONDS,
-} from '@/lib/r2';
+  SIGNED_UPLOAD_TTL_SECONDS,
+} from '@/lib/storage';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -84,12 +85,17 @@ export async function POST(request: Request) {
   }
 
   const currentlyUsed = typeof usedBytes === 'number' ? usedBytes : 0;
-  if (currentlyUsed + size > R2_QUOTA_BYTES) {
+  // Refuse at the soft limit (90% of free tier), not the hard ceiling, so the
+  // user gets a clear message from this app with room to export, rather than an
+  // opaque platform error once the quota is actually gone.
+  if (currentlyUsed + size > STORAGE_SOFT_LIMIT_BYTES) {
     return NextResponse.json(
       {
-        error: 'Storage quota exceeded',
+        error:
+          'Storage quota reached. Delete some files or export them before uploading more.',
         used: currentlyUsed,
-        limit: R2_QUOTA_BYTES,
+        limit: STORAGE_SOFT_LIMIT_BYTES,
+        hardLimit: STORAGE_QUOTA_BYTES,
         requested: size,
       },
       { status: 507 },
@@ -97,12 +103,12 @@ export async function POST(request: Request) {
   }
 
   try {
-    // presignUpload re-validates that the key sits inside this user's namespace,
-    // so a forged objectKey cannot target another user's object.
-    const url = await presignUpload(objectKey, user.id, size);
+    // createSignedUpload re-validates that the key sits inside this user's
+    // namespace, so a forged objectKey cannot target another user's object.
+    const { signedUrl, token } = await createSignedUpload(objectKey, user.id);
 
     return NextResponse.json(
-      { url, objectKey, expiresIn: PRESIGN_TTL_SECONDS },
+      { url: signedUrl, token, objectKey, expiresIn: SIGNED_UPLOAD_TTL_SECONDS },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (err) {

@@ -24,10 +24,6 @@ const CHUNK_DIR = '.next/static/chunks';
 
 /** Variables that must never have their value inlined into client code. */
 const SERVER_ONLY_VARS = [
-  'R2_ACCESS_KEY_ID',
-  'R2_SECRET_ACCESS_KEY',
-  'R2_ACCOUNT_ID',
-  'R2_BUCKET_NAME',
   'SUPABASE_SERVICE_ROLE_KEY',
   'METRICS_INGEST_SECRET',
 ];

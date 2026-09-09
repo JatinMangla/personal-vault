@@ -9,10 +9,10 @@
  *   4. ask Vercel for a presigned PUT
  *   5. Vercel checks session and quota
  *   6. Vercel mints a 60s presigned URL
- *   7. browser PUTs ciphertext DIRECTLY to R2 — never through Vercel
+ *   7. browser PUTs ciphertext DIRECTLY to storage — never through Vercel
  *   8. browser records metadata via /api/files
  *
- * Download is the mirror image with a presigned GET and per-chunk decryption.
+ * Download is the mirror image with a signed GET and per-chunk decryption.
  */
 
 import {
@@ -92,11 +92,14 @@ export async function uploadFile(
     throw new Error(detail.error ?? `Could not get an upload URL (${presignRes.status})`);
   }
 
-  const { url } = (await presignRes.json()) as { url: string };
+  const { url } = (await presignRes.json()) as { url: string; token: string };
 
-  // --- 7. PUT ciphertext DIRECTLY to R2 -----------------------------------
-  // Note this fetch goes to Cloudflare, not to our own origin. File bytes never
-  // transit a Vercel function.
+  // --- 7. PUT ciphertext DIRECTLY to storage -------------------------------
+  // This fetch goes to Supabase Storage, not to our own origin. File bytes
+  // never transit a Vercel function.
+  //
+  // The signed upload URL already carries its token as a query parameter, so a
+  // plain PUT works and avoids pulling the Supabase SDK into this path.
   onProgress?.({ stage: 'uploading', fraction: 0 });
 
   const putRes = await fetch(url, {
@@ -104,11 +107,20 @@ export async function uploadFile(
     // Cast: BodyInit accepts a BufferSource, and this avoids copying the
     // ciphertext a second time on a memory-constrained phone.
     body: ciphertext as unknown as BodyInit,
-    headers: { 'Content-Type': 'application/octet-stream' },
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      // Supabase rejects an upload to an existing key unless upsert is set.
+      // Object keys are random, so a collision means a retry of the same
+      // upload rather than a different file.
+      'x-upsert': 'true',
+    },
   });
 
   if (!putRes.ok) {
-    throw new Error(`Upload to storage failed (${putRes.status})`);
+    const detail = await putRes.text().catch(() => '');
+    throw new Error(
+      `Upload to storage failed (${putRes.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`,
+    );
   }
   onProgress?.({ stage: 'uploading', fraction: 1 });
 

@@ -8,7 +8,7 @@ Four components, one monorepo:
 | | Component | What it is | Where it runs |
 |---|---|---|---|
 | **A** | Media engine | Immich, **deployed** not rebuilt | Oracle Cloud Always Free (Mumbai) |
-| **B** | Document vault | End-to-end encrypted, **built here** | Vercel + Cloudflare R2 + Supabase |
+| **B** | Document vault | End-to-end encrypted, **built here** | Vercel + Supabase (DB + Storage) |
 | **C** | Backup & ops | restic, systemd, restore drills | Oracle VM → Gozunga |
 | **D** | Health dashboard | Push-based metrics at `/status` | Oracle collector → Vercel → Supabase |
 
@@ -19,9 +19,9 @@ Four components, one monorepo:
 ### 1. Losing your passphrase **and** recovery code means permanent data loss
 
 The document vault is end-to-end encrypted. Files are encrypted in your browser
-with AES-256-GCM before upload; Cloudflare stores ciphertext and Vercel never
-sees the key. Nobody — not Cloudflare, not Vercel, not the author of this
-repository — can decrypt your files without your passphrase.
+with AES-256-GCM before upload; the storage provider holds only ciphertext and
+Vercel never sees the key. Nobody — not Supabase, not Vercel, not the author of
+this repository — can decrypt your files without your passphrase.
 
 The recovery code shown once at setup is the only backstop. **Write it down and
 store it somewhere physical.** If you lose both, the files are unrecoverable.
@@ -83,7 +83,7 @@ No developer account is needed. Nothing is submitted or reviewed.
 | Oracle compute | 2 OCPU / 12 GB ARM | 2 / 12 | Terminated if exceeded | Never resize up |
 | Oracle block storage | 200 GB | 200 GB (50 boot + 150 block) | VPU tier is billable | Keep block volume at **0 VPU** |
 | Oracle egress | 10 TB/mo | < 50 GB | None | — |
-| Cloudflare R2 | 10 GB, zero egress | 2–5 GB | Low | Quota checked in the presign API |
+| Supabase Storage | 1 GB files, 5 GB/mo egress | < 1 GB | Low — no card on file | Soft limit refuses uploads at 90% |
 | Vercel Hobby | 100 GB transfer | < 1 GB | Very low — files bypass Vercel | Presigned URLs only |
 | Supabase | 500 MB Postgres | < 50 MB | Low | Metadata only, no blobs |
 | Gozunga | 100 GB storage | 60–90 GB | Egress $5/TB on restore | Photos and docs only, no video |
@@ -132,7 +132,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P8 | Monitoring + final audit | Workflows written; needs live services |
 
 Everything that can be built and verified without cloud accounts is done and
-tested. What remains needs your Oracle, Vercel, Supabase, R2 and Gozunga
+tested. What remains needs your Oracle, Vercel, Supabase and Gozunga
 accounts — see `docs/BUILD-STATE.md` for exactly what to do next.
 
 ## Verifying locally
@@ -161,7 +161,7 @@ Note for this machine: `npm` works from PowerShell but fails under Git Bash
   fresh random IV per chunk, keys derived with PBKDF2-SHA256 at 600,000
   iterations, held in memory only and marked non-extractable.
 - **File bytes never transit Vercel.** The function authenticates the user and
-  mints a 60-second presigned URL; the browser talks to R2 directly.
+  mints a short-lived signed URL; the browser talks to storage directly.
 - **Row Level Security** on every Supabase table, with policies scoped to
   `auth.uid()`.
 - **No secrets in the repository.** A PreToolUse hook blocks writes containing

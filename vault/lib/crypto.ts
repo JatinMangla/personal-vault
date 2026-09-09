@@ -1,8 +1,8 @@
 /**
  * Client-side encryption core for the document vault.
  *
- * Threat model: Vercel and Cloudflare are both treated as hostile. They see
- * ciphertext and nothing else. The passphrase never leaves the browser, the
+ * Threat model: the hosting platform and the storage provider are both treated
+ * as hostile. They see ciphertext and nothing else. The passphrase never leaves the browser, the
  * derived key is non-extractable and memory-only, and losing both passphrase
  * and recovery code means the data is gone. That last property is the point
  * of the system, not a defect.
@@ -75,7 +75,7 @@ export interface EncryptionManifest {
 }
 
 export interface EncryptedFile {
-  /** Concatenated ciphertext chunks, in index order. This is what goes to R2. */
+  /** Concatenated ciphertext chunks, in index order. This is what is uploaded. */
   ciphertext: Uint8Array;
   manifest: EncryptionManifest;
 }
@@ -330,7 +330,7 @@ export async function decryptFile(
  * Encrypt a small JSON value (filename, tags, notes, the manifest itself).
  *
  * Metadata is encrypted separately from file bytes because the client needs to
- * decrypt the whole index to search it, without fetching any file from R2.
+ * decrypt the whole index to search it, without fetching any file blob.
  * Self-contained: the IV is prefixed to the ciphertext.
  */
 export async function encryptMetadata(value: unknown, key: CryptoKey): Promise<string> {
@@ -372,16 +372,16 @@ export async function decryptMetadata<T = unknown>(
 // ---------------------------------------------------------------------------
 
 /**
- * Opaque R2 object key.
+ * Opaque storage object key.
  *
  * Random rather than derived from the filename: an object key is visible to
- * Cloudflare, so deriving it from the name would leak the name. 32 hex chars
- * of CSPRNG output, namespaced by user id.
+ * the storage provider, so deriving it from the name would leak the name.
+ * 32 hex chars of CSPRNG output, namespaced by user id.
  */
 export function generateObjectKey(userId: string): string {
   const random = crypto.getRandomValues(new Uint8Array(16));
   const hex = Array.from(random, (b) => b.toString(16).padStart(2, '0')).join('');
-  return `u/${userId}/${hex}`;
+  return `${userId}/${hex}`;
 }
 
 /**

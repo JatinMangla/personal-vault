@@ -1,9 +1,9 @@
 /**
  * POST /api/presign-download
  *
- * Mints a 60-second presigned GET. The browser fetches ciphertext directly from
- * R2 and decrypts it locally — bytes never pass through this function, and R2
- * charges zero egress, so downloads are free at any volume.
+ * Mints a 60-second signed GET. The browser fetches ciphertext directly from
+ * Supabase Storage and decrypts it locally — bytes never pass through this
+ * function.
  *
  * Ownership is checked twice: once against the database row (RLS scopes the
  * query to the caller) and once against the object key namespace inside
@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { serverClient } from '@/lib/supabase-server';
-import { presignDownload, PRESIGN_TTL_SECONDS } from '@/lib/r2';
+import { createSignedDownload, SIGNED_DOWNLOAD_TTL_SECONDS } from '@/lib/storage';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -67,9 +67,9 @@ export async function POST(request: Request) {
   }
 
   try {
-    const url = await presignDownload(objectKey, user.id);
+    const url = await createSignedDownload(objectKey, user.id);
     return NextResponse.json(
-      { url, expiresIn: PRESIGN_TTL_SECONDS },
+      { url, expiresIn: SIGNED_DOWNLOAD_TTL_SECONDS },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (err) {

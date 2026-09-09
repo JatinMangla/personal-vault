@@ -106,13 +106,25 @@ sudo /opt/personal-vault/ops/backup/restore-test.sh
 This is a **blocking gate**. Do not consider the project complete until it
 appends a PASS to `ops/RESTORE-LOG.md`.
 
-### 4. Supabase
+### 4. Supabase (database AND file storage)
 
-Create a project, then apply the schema:
+Create a project, then apply BOTH migrations in the SQL Editor, in order:
+
+```
+vault/supabase/migrations/0001_initial_schema.sql     tables, RLS, quota function
+vault/supabase/migrations/0002_storage_bucket.sql     private bucket + storage RLS
+```
+
+Or from a terminal:
 
 ```bash
 psql "$SUPABASE_DB_URL" -f vault/supabase/migrations/0001_initial_schema.sql
+psql "$SUPABASE_DB_URL" -f vault/supabase/migrations/0002_storage_bucket.sql
 ```
+
+Confirm the bucket exists and is **private**: Storage -> Buckets -> `vault-files`
+should show a padlock / "Private". A public bucket would expose every blob to
+anyone who could guess a key.
 
 Verify RLS is actually on — the migration enables it, but check rather than
 trust, because a table without RLS is world-readable to anyone with the anon key:
@@ -125,31 +137,33 @@ Then add `SUPABASE_URL` and `SUPABASE_ANON_KEY` as repository secrets so
 `supabase-keepalive.yml` can run. Free projects pause after 7 days idle, and a
 paused project breaks the vault silently.
 
-### 5. Cloudflare R2
+### 5. Cloudflare — NOT NEEDED
 
-Create a bucket. Create an API token scoped to **that one bucket**, object
-read/write only — never an account-level token.
+Cloudflare R2 was the original blob store and has been removed. It required a
+payment method with no spending cap, which conflicted with the no-automatic-
+billing rule. Document blobs now live in Supabase Storage (step 4).
 
-CORS must allow PUT and GET from your Vercel origin, or direct browser uploads
-will fail:
-
-```json
-[{
-  "AllowedOrigins": ["https://your-app.vercel.app"],
-  "AllowedMethods": ["GET", "PUT"],
-  "AllowedHeaders": ["*"],
-  "MaxAgeSeconds": 3600
-}]
-```
+**Do not create a Cloudflare account or enter a card.** No CORS configuration is
+needed either — Supabase Storage accepts the signed upload URL directly.
 
 ### 6. Vercel
 
 The repository must be under a **personal GitHub account, not an organisation** —
 Hobby projects cannot connect to org-owned repos.
 
-Set every variable from `vault/.env.example` in the dashboard. The four R2
-variables and `SUPABASE_SERVICE_ROLE_KEY` are **server-only**: never prefix them
-`NEXT_PUBLIC_`.
+Set every variable from `vault/.env.example` in the dashboard — there are now
+**four**, not eight:
+
+| Variable | Source |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase -> Settings -> API -> Project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase -> Settings -> API -> anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase -> Settings -> API -> service_role key |
+| `METRICS_INGEST_SECRET` | `openssl rand -hex 32` |
+
+`SUPABASE_SERVICE_ROLE_KEY` and `METRICS_INGEST_SECRET` are **server-only**:
+never prefix them `NEXT_PUBLIC_`. Set **Root Directory = `vault`** in
+Settings -> General, or the build fails.
 
 Set `METRICS_INGEST_SECRET` to the same value as in `/etc/personal-vault/ops.env`
 on the VM, or the collector's pushes will be rejected as unsigned.
@@ -183,6 +197,10 @@ collector, and gitleaks over the full history.
 - **`lib/supabase.ts` was split** into browser/server/types modules. As one
   module it pulled `next/headers` into the client bundle and the build failed —
   which was the client/server boundary doing its job.
+- **Storage moved from Cloudflare R2 to Supabase Storage.** R2 needs a card on
+  file and has no spending cap, breaking spec rule 1.1. Cost: 1 GB free instead
+  of 10 GB, accepted because documents here are mostly PDFs and office files.
+  The crypto core was untouched. See `vault/SECURITY-NOTES.md`.
 - **CSP tightened.** `style-src` is `'self'` with no `unsafe-inline`; only the
   narrow `style-src-attr` exception remains, for four genuinely dynamic values.
   Rationale in `vault/SECURITY-NOTES.md`.

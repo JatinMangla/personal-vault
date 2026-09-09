@@ -496,7 +496,10 @@ describe('object keys and filename hashing', () => {
   it('scopes object keys to the user and never repeats them', () => {
     const keys = new Set(Array.from({ length: 500 }, () => generateObjectKey('user-123')));
     expect(keys.size).toBe(500);
-    for (const k of keys) expect(k.startsWith('u/user-123/')).toBe(true);
+    // The first path segment is the owner's id. Supabase Storage RLS policies
+    // key off exactly this via storage.foldername(name)[1], so the format is
+    // load-bearing rather than cosmetic.
+    for (const k of keys) expect(k.startsWith('user-123/')).toBe(true);
   });
 
   it('does not leak the filename into the object key', () => {

@@ -100,3 +100,55 @@ To remove the exception entirely, the dynamic widths would need to be quantised
 into a fixed set of classes (say, 100 `.w-N` rules). That trades a real loss of
 precision in the gauges for a marginal security gain, so it has not been done.
 Revisit if the app ever renders untrusted HTML — at present it renders none.
+
+## Why Supabase Storage rather than Cloudflare R2
+
+The original design used R2 for document blobs: 10 GB free, zero egress, and an
+S3-compatible API. It was replaced before any data was stored.
+
+**Reason:** Cloudflare requires a payment method on file before R2 can be
+enabled at all, even on the free tier, and provides **no spending cap**.
+Exceeding the free tier bills the card automatically. The project's hard rule
+(spec 1.1) is that no credit card may be attached in a way that permits
+automatic overage billing without an alert first. R2 could not satisfy that.
+
+Supabase Storage requires no card and restricts service rather than billing when
+a free limit is reached, which is the safety property the rule was protecting.
+
+**What was given up:** 1 GB of free storage instead of 10 GB, and 5 GB/month of
+egress instead of unlimited. Accepted because the documents in scope are
+predominantly PDFs and office files at roughly 100 KB - 2 MB each, so a few
+thousand files fit comfortably. `STORAGE_SOFT_LIMIT_BYTES` refuses uploads at
+90% of the ceiling so the limit surfaces as a clear message with room to export,
+rather than as an opaque platform error.
+
+**What did not change:** the crypto core is untouched. Files are still encrypted
+in the browser with AES-256-GCM before upload, and the storage provider holds
+only ciphertext under a random object key.
+
+### Deviation: signed upload URL lifetime
+
+The spec caps presigned URL TTL at 60 seconds. Supabase honours that for
+downloads (`createSignedUrl(path, 60)`) but its signed **upload** tokens are
+fixed at 2 hours with no way to shorten them.
+
+Assessed as acceptable, and recorded rather than quietly ignored:
+
+- the token authorises writing to exactly ONE random object key, already
+  recorded against the user's row
+- it grants no read access, so it cannot be used to exfiltrate anything
+- the bucket is private with RLS, so the object stays unreadable without a
+  separate signed download URL
+- the client uses the token immediately; the window is theoretical
+
+Residual risk: a token intercepted in transit could overwrite that single object
+within two hours. TLS covers transit.
+
+### Storage RLS
+
+`supabase/migrations/0002_storage_bucket.sql` creates a **private** bucket and
+policies scoped to `(storage.foldername(name))[1] = auth.uid()::text`, matching
+the `<userId>/<random>` object-key format. These are defence in depth: the API
+routes already check ownership before signing. They matter because a signed URL
+is a bearer credential, and if one leaked the policies still confine what a
+normal authenticated session can reach. The `anon` role is granted nothing.

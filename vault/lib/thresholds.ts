@@ -34,8 +34,8 @@ const MB = 1024 ** 2;
 export const LIMITS = {
   /** Oracle block volume, the media store. */
   blockVolumeBytes: 150 * GB,
-  /** Cloudflare R2 free tier. */
-  r2Bytes: 10 * GB,
+  /** Supabase Storage free tier (file storage). */
+  storageBytes: 1 * GB,
   /** Gozunga free tier, the restic repository. */
   gozungaBytes: 100 * GB,
   /** Supabase free tier Postgres. */
@@ -58,7 +58,7 @@ interface PercentRule {
 const PERCENT_RULES = {
   blockVolume: { amberAt: 0.70, redAt: 0.85 },
   bootVolume: { amberAt: 0.70, redAt: 0.85 },
-  r2: { amberAt: 0.60, redAt: 0.85 },
+  storage: { amberAt: 0.60, redAt: 0.85 },
   gozunga: { amberAt: 0.70, redAt: 0.90 },
   supabase: { amberAt: 0.50, redAt: 0.80 },
   ram: { amberAt: 0.80, redAt: 0.92 },
