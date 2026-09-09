@@ -126,7 +126,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P2 | Immich running, hardened, tuned | Automation written; needs P1 |
 | P3 | **Backup + verified restore** (gate) | Scripts written; **drill not yet run** |
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
-| P5 | Presign API + auth | **Done** — build clean, bundle scan clean |
+| P5 | Presign API + auth | **Deployed & verified live** |
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 130/130 across 5 viewports |
 | P7 | Collector + `/status` dashboard | **Done** — needs a live VM to feed it |
 | P8 | Monitoring + final audit | Workflows written; needs live services |

@@ -1,6 +1,6 @@
 # Build state and next actions
 
-Last updated: **2026-09-09**
+Last updated: **2026-09-10**
 
 Everything buildable without cloud accounts is complete and verified. What
 remains requires provisioning, which needs your credentials.
@@ -22,6 +22,30 @@ These were run, not assumed:
 | Shell scripts (`bash -n`) | all parse |
 | YAML (15 files) | all parse |
 | `npm audit` | no high or critical; 2 moderate dev-only, documented |
+
+## Deployed and verified live (2026-09-10)
+
+Component B (document vault) is **deployed and working** at
+`https://vault-amber-five.vercel.app`.
+
+| Check | Result |
+|---|---|
+| Supabase tables + RLS | `files`, `user_keys`, `metrics_samples`, all RLS on |
+| Table policies | 4 / 3 / 1, scoped to `auth.uid()` |
+| Bucket `vault-files` | private, 100 MB per-object limit |
+| Storage policies | 4, granted to `authenticated` only |
+| Functions | `user_storage_bytes`, `prune_metrics_samples`, `touch_updated_at` |
+| All pages | 200 |
+| `/api/files`, `/api/metrics/latest` | 401 without a session |
+| `/api/metrics/ingest` | 405 on GET; 401 on unsigned or forged POST |
+
+Supabase project is `bpbsfpzowzxcrhscjfwk` in **ap-northeast-1 (Tokyo)**, not
+Mumbai. Functionally identical on the free tier; adds roughly 50 ms of latency
+from Pune. Not worth recreating unless it becomes noticeable.
+
+Note: the Supabase MCP connector authorises **one organisation at a time**, so
+seeing this project required switching the connector away from the org holding
+the unrelated `stock-inventory` app.
 
 ## Not yet verified — requires live infrastructure
 
