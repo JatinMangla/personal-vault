@@ -1,0 +1,13 @@
+---
+# Pinned Immich release. Bumping this is deliberate: read the release notes and
+# take a backup first. Immich ships breaking database migrations.
+immich_version: v2.3.0
+
+immich_db_username: postgres
+immich_db_name: immich
+immich_timezone: Asia/Kolkata
+
+# immich_db_password has NO default on purpose. Supply it at run time:
+#   --extra-vars "immich_db_password=$(openssl rand -base64 32)"
+# A default here would end up committed, and a shared default password on a
+# database holding a personal photo archive is not acceptable.

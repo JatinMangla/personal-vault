@@ -1,0 +1,91 @@
+---
+# Tailscale: the only path into this machine.
+#
+# Tailscale makes OUTBOUND connections to coordinate, then negotiates a direct
+# peer-to-peer WireGuard tunnel. No inbound port is opened and no public IP is
+# needed. From Pune to Oracle Mumbai this is also the lowest-latency route
+# available, which is why there is no CDN in front of the media server.
+#
+# The auth key is passed at run time, never stored in the repo:
+#   ansible-playbook -i inventory.ini playbook.yml \
+#     --extra-vars "tailscale_auth_key=$TS_AUTHKEY"
+
+- name: Fetch the Tailscale GPG key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_distribution_release }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Add the Tailscale apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg]
+      https://pkgs.tailscale.com/stable/ubuntu
+      {{ ansible_distribution_release }} main
+    filename: tailscale
+    state: present
+    update_cache: true
+
+- name: Install Tailscale
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+
+- name: Ensure tailscaled is running
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: true
+    state: started
+
+- name: Check whether this node is already on the tailnet
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: ts_status
+  changed_when: false
+  failed_when: false
+
+- name: Bring the node up on the tailnet
+  # Guarded by the status check above so re-running the playbook does not
+  # re-authenticate an already-connected node.
+  ansible.builtin.command:
+    cmd: >-
+      tailscale up
+      --authkey={{ tailscale_auth_key }}
+      --hostname={{ tailscale_hostname | default('immich-mumbai') }}
+      --ssh=false
+      --accept-routes=false
+    # --ssh=false: SSH stays on OpenSSH with key-only auth. Tailscale SSH would
+    # add a second authentication path to reason about for no benefit here.
+  when:
+    - tailscale_auth_key is defined
+    - tailscale_auth_key | length > 0
+    - ts_status.rc != 0 or (ts_status.stdout | from_json).BackendState != 'Running'
+  no_log: true  # the auth key must never appear in Ansible output
+
+- name: Read the Tailscale IPv4 address
+  ansible.builtin.command:
+    cmd: tailscale ip -4
+  register: tailscale_ip_result
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: tailscale_ip_result.rc == 0 and tailscale_ip_result.stdout | trim | length > 0
+
+- name: Record the Tailscale IP for later roles
+  # docker-compose.yml binds Immich to this address specifically, rather than
+  # 0.0.0.0, so the service is unreachable from the public interface even if
+  # the firewall were misconfigured.
+  ansible.builtin.set_fact:
+    tailscale_ip: "{{ tailscale_ip_result.stdout | trim }}"
+
+- name: Show the Tailscale address
+  ansible.builtin.debug:
+    msg: "Tailscale IPv4: {{ tailscale_ip }} - Immich will bind here only."
+
+- name: Enable Tailscale SSH key expiry reminder
+  ansible.builtin.debug:
+    msg: >-
+      Reminder: disable key expiry for this node in the Tailscale admin console,
+      or the box drops off the tailnet after 180 days and becomes unreachable.

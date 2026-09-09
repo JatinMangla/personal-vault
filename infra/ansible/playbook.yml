@@ -1,0 +1,101 @@
+---
+# Provisions the Oracle Always Free VM into a hardened Immich host.
+#
+# Usage (from a workstation on the Tailscale network, or over the public IP for
+# the very first run before Tailscale is up):
+#
+#   ansible-playbook -i inventory.ini playbook.yml
+#
+# Every task is idempotent: running this twice must be a no-op the second time.
+# That is a hard rule, not an aspiration - this playbook will be re-run to apply
+# small changes, and a non-idempotent task turns that into a gamble.
+#
+# Order matters. Hardening runs FIRST so the box is not sitting exposed while
+# Docker pulls images. Tailscale runs before Immich because Immich binds to the
+# Tailscale interface address and cannot start without it.
+
+- name: Provision and harden the Immich media host
+  hosts: immich
+  become: true
+  gather_facts: true
+
+  vars:
+    # Overridden per-host in inventory.ini or a vars file. Never put secrets
+    # here - use --extra-vars or an environment variable at run time.
+    immich_user: immich
+    immich_dir: /opt/immich
+    media_mount: /mnt/media
+    db_data_location: /var/lib/immich/postgres
+    block_device: /dev/oracleoci/oraclevdb
+
+  pre_tasks:
+    - name: Verify the target is ARM64
+      # Every image in docker-compose.yml must have an arm64 variant. If this
+      # playbook is ever pointed at an x86 host, fail loudly rather than
+      # silently pulling different images than were tested.
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture == "aarch64"
+        fail_msg: >-
+          Expected an aarch64 host (Oracle VM.Standard.A1.Flex), got
+          {{ ansible_architecture }}. The pinned images target ARM64.
+        success_msg: "Architecture confirmed: aarch64"
+
+    - name: Verify Ubuntu 24.04
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version('24.04', '>=')
+        fail_msg: >-
+          Expected Ubuntu 24.04 or newer, got
+          {{ ansible_distribution }} {{ ansible_distribution_version }}.
+
+    - name: Warn if the instance exceeds the Always Free entitlement
+      # Oracle reduced the Always Free Ampere allowance to 2 OCPU / 12 GB.
+      # Instances above the entitlement are terminated automatically, which
+      # would destroy the media host. Surface it during provisioning, not later.
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: this host reports {{ ansible_processor_vcpus }} vCPU and
+          {{ (ansible_memtotal_mb / 1024) | round(1) }} GB RAM. The Always Free
+          entitlement is 2 OCPU / 12 GB. Instances exceeding it are terminated.
+      when: >-
+        ansible_processor_vcpus | int > 2
+        or (ansible_memtotal_mb | int) > 13000
+
+    - name: Refresh the apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+  roles:
+    - role: hardening
+      tags: [hardening, security]
+    - role: docker
+      tags: [docker]
+    - role: tailscale
+      tags: [tailscale, network]
+    - role: immich
+      tags: [immich, app]
+
+  post_tasks:
+    - name: Confirm no unexpected ports listen on the public interface
+      # The acceptance criterion for P1 is that nmap from the internet shows
+      # zero open ports. This is the cheap local check of the same property.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ss -tlnH | awk '{print $4}' \
+            | grep -vE '^(127\.0\.0\.1|\[::1\]|100\.)' \
+            | grep -vE '^\*:22$' || true
+        executable: /bin/bash
+      register: public_listeners
+      changed_when: false
+
+    - name: Report any public listeners
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'No services listening on a public address.'
+             if public_listeners.stdout | trim == ''
+             else 'REVIEW REQUIRED - listening on: '
+                  ~ public_listeners.stdout_lines | join(', ') }}

@@ -1,0 +1,162 @@
+---
+# Deploys Immich. Does not build it, does not extend it.
+#
+# Volume layout, which is load-bearing for the budget:
+#   boot 50 GB  (Balanced)   -> OS, Docker, Postgres data
+#   block 150 GB (Lower Cost, 0 VPU) -> UPLOAD_LOCATION, all media
+#
+# Never raise the block volume's VPU tier. VPUs bill separately from capacity at
+# roughly $0.0017 per VPU per GB-month; moving 150 GB to Balanced costs about
+# $3/month and blows the $1/year ceiling on its own.
+
+# --- Block volume ---------------------------------------------------------
+
+- name: Check whether the block device is present
+  ansible.builtin.stat:
+    path: "{{ block_device }}"
+  register: block_dev
+
+- name: Fail with guidance if the block volume is missing
+  ansible.builtin.fail:
+    msg: >-
+      Block device {{ block_device }} not found. Attach the 150 GB block volume
+      in the OCI console (Lower Cost / 0 VPU), then run the iSCSI attach
+      commands the console provides. See infra/docs/volume-layout.md.
+  when: not block_dev.stat.exists
+
+- name: Read the filesystem on the block device
+  ansible.builtin.command:
+    cmd: "blkid -o value -s TYPE {{ block_device }}"
+  register: blkid_result
+  changed_when: false
+  failed_when: false
+
+- name: Create an ext4 filesystem if the volume is blank
+  # Guarded on blkid returning nothing, so this can never reformat a volume
+  # that already holds media.
+  community.general.filesystem:
+    fstype: ext4
+    dev: "{{ block_device }}"
+    opts: -m 1 -L immich-media
+  when: blkid_result.stdout | trim == ''
+
+- name: Mount the media volume
+  ansible.posix.mount:
+    path: "{{ media_mount }}"
+    src: "LABEL=immich-media"
+    fstype: ext4
+    # noatime: every read would otherwise write back an access time, which is
+    # pure waste on a media library and costs block-volume write bandwidth.
+    # nofail: a missing volume must not stop the host from booting, or a bad
+    # attach leaves the box unreachable.
+    opts: defaults,noatime,nofail
+    state: mounted
+
+- name: Create the Immich media subdirectories
+  ansible.builtin.file:
+    path: "{{ media_mount }}/{{ item }}"
+    state: directory
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0750'
+  loop:
+    - upload          # originals from mobile and browser
+    - library         # originals under the storage template engine
+    - thumbs          # derived, excluded from backup
+    - encoded-video   # derived, excluded from backup
+    - profile         # avatars
+    - backups         # Immich's own database dumps - backed up, never excluded
+
+- name: Create the Postgres data directory on the boot volume
+  # Deliberately NOT on the block volume: Postgres wants low-latency random
+  # I/O, and the block volume is provisioned for large sequential reads.
+  ansible.builtin.file:
+    path: "{{ db_data_location }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# --- Compose project ------------------------------------------------------
+
+- name: Create the Immich project directory
+  ansible.builtin.file:
+    path: "{{ immich_dir }}"
+    state: directory
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0750'
+
+- name: Create the postgres config directory
+  ansible.builtin.file:
+    path: "{{ immich_dir }}/postgres"
+    state: directory
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0750'
+
+- name: Install docker-compose.yml
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../docker-compose.yml"
+    dest: "{{ immich_dir }}/docker-compose.yml"
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0640'
+  notify: Restart immich
+
+- name: Install the Postgres tuning file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../postgres/tuning.conf"
+    dest: "{{ immich_dir }}/postgres/tuning.conf"
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0640'
+  notify: Restart immich
+
+- name: Render the environment file
+  # 0600: contains DB_PASSWORD. Never world-readable, never committed.
+  ansible.builtin.template:
+    src: immich.env.j2
+    dest: "{{ immich_dir }}/.env"
+    owner: "{{ immich_user }}"
+    group: "{{ immich_user }}"
+    mode: '0600'
+  no_log: true
+  notify: Restart immich
+
+- name: Validate the compose file
+  ansible.builtin.command:
+    cmd: docker compose config --quiet
+    chdir: "{{ immich_dir }}"
+  changed_when: false
+
+- name: Pull the pinned images
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: "{{ immich_dir }}"
+  register: compose_pull
+  changed_when: "'Downloaded newer image' in compose_pull.stderr or 'Pull complete' in compose_pull.stderr"
+
+- name: Start the Immich stack
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ immich_dir }}"
+  register: compose_up
+  changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr"
+
+- name: Wait for the Immich API to answer
+  ansible.builtin.uri:
+    url: "http://{{ tailscale_ip }}:2283/api/server/ping"
+    status_code: 200
+  register: immich_ping
+  retries: 30
+  delay: 10
+  until: immich_ping.status == 200
+
+- name: Report the access URL
+  ansible.builtin.debug:
+    msg: >-
+      Immich is up at http://{{ tailscale_ip }}:2283 - reachable only from the
+      tailnet. Next: create the admin account, then set video transcoding to
+      "not browser-compatible only" and disable HEIC-to-JPEG conversion.
+      See infra/docs/immich-settings.md.

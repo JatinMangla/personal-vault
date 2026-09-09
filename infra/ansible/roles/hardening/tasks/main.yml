@@ -1,0 +1,214 @@
+---
+# Baseline hardening.
+#
+# The security model is that this box has NO inbound ports open to the public
+# internet at all. ufw defaults to deny and only the tailscale0 interface is
+# allowed. SSH password auth is disabled anyway - defence in depth, because a
+# firewall rule can be undone by accident and a disabled auth method cannot.
+
+# --- SSH ------------------------------------------------------------------
+
+- name: Harden sshd configuration
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+    # A drop-in rather than editing sshd_config directly, so an Ubuntu package
+    # upgrade cannot silently revert these settings.
+    content: |
+      # Managed by Ansible (roles/hardening). Do not edit by hand.
+      PasswordAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      UsePAM yes
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      MaxAuthTries 3
+      MaxSessions 4
+      LoginGraceTime 30
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      # Modern algorithms only.
+      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+    # Refuse to install a config that sshd itself rejects. Without this, a typo
+    # here locks everyone out of the box permanently.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Restart sshd
+
+- name: Ensure ssh service is enabled
+  ansible.builtin.systemd:
+    name: ssh
+    enabled: true
+    state: started
+
+# --- Firewall -------------------------------------------------------------
+
+- name: Install ufw and fail2ban
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+    state: present
+
+- name: Set ufw default policies
+  community.general.ufw:
+    direction: "{{ item.direction }}"
+    policy: "{{ item.policy }}"
+  loop:
+    - { direction: incoming, policy: deny }
+    - { direction: outgoing, policy: allow }
+    - { direction: routed, policy: deny }
+
+- name: Allow all traffic on the Tailscale interface
+  # This is the ONLY way in. Tailscale itself needs no inbound rule: it makes
+  # outbound connections and negotiates a peer-to-peer WireGuard tunnel.
+  community.general.ufw:
+    rule: allow
+    interface: tailscale0
+    direction: in
+
+- name: Allow the Tailscale UDP port for direct connections
+  # Without this, Tailscale still works but falls back to a relay (DERP),
+  # which adds latency to every photo and video byte.
+  community.general.ufw:
+    rule: allow
+    port: '41641'
+    proto: udp
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+    logging: 'low'
+
+# --- fail2ban -------------------------------------------------------------
+
+- name: Configure fail2ban for sshd
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible (roles/hardening). Do not edit by hand.
+      [sshd]
+      enabled = true
+      backend = systemd
+      maxretry = 3
+      findtime = 600
+      bantime = 3600
+      # Never lock out the Tailscale range - being unable to reach the box is
+      # a worse outcome here than a brute-force attempt from inside the tailnet.
+      ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10
+  notify: Restart fail2ban
+
+- name: Ensure fail2ban is running
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+
+# --- Unattended upgrades --------------------------------------------------
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Enable security updates only
+  # OS security patches auto-apply. Immich does NOT - it ships breaking changes
+  # and an unattended container upgrade will corrupt a library. That distinction
+  # is the whole point of this block.
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/51-unattended-security
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      // Managed by Ansible (roles/hardening). Do not edit by hand.
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Ensure unattended-upgrades is running
+  ansible.builtin.systemd:
+    name: unattended-upgrades
+    enabled: true
+    state: started
+
+# --- Kernel and memory ----------------------------------------------------
+
+- name: Apply sysctl tuning
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-immich.conf
+    reload: true
+    state: present
+  loop:
+    # Prefer keeping the Postgres/pgvector working set in RAM over swapping it
+    # out. Swapping the vector index is what makes semantic search feel slow.
+    - { name: vm.swappiness, value: '10' }
+    - { name: vm.vfs_cache_pressure, value: '50' }
+    # Network hardening.
+    - { name: net.ipv4.conf.all.rp_filter, value: '1' }
+    - { name: net.ipv4.conf.all.accept_redirects, value: '0' }
+    - { name: net.ipv6.conf.all.accept_redirects, value: '0' }
+    - { name: net.ipv4.conf.all.send_redirects, value: '0' }
+    - { name: net.ipv4.conf.all.accept_source_route, value: '0' }
+    - { name: net.ipv4.tcp_syncookies, value: '1' }
+    - { name: kernel.dmesg_restrict, value: '1' }
+    # Required for Tailscale subnet routing and for container networking.
+    - { name: net.ipv4.ip_forward, value: '1' }
+
+- name: Ensure a swap file exists
+  # 12 GB is comfortable but ML jobs plus Postgres can spike. A modest swap file
+  # turns a potential OOM kill (which would interrupt an upload) into a slowdown.
+  ansible.builtin.command:
+    cmd: fallocate -l 2G /swapfile
+    creates: /swapfile
+
+- name: Secure the swap file permissions
+  ansible.builtin.file:
+    path: /swapfile
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Format the swap file
+  ansible.builtin.command:
+    cmd: mkswap /swapfile
+  register: mkswap_result
+  changed_when: "'Setting up swapspace' in mkswap_result.stdout"
+  failed_when:
+    - mkswap_result.rc != 0
+    - "'Device or resource busy' not in mkswap_result.stderr"
+
+- name: Enable the swap file at boot
+  ansible.posix.mount:
+    name: none
+    src: /swapfile
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: Activate swap now
+  ansible.builtin.command:
+    cmd: swapon /swapfile
+  register: swapon_result
+  changed_when: swapon_result.rc == 0
+  failed_when:
+    - swapon_result.rc != 0
+    - "'already active' not in swapon_result.stderr"

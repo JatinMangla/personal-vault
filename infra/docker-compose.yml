@@ -1,0 +1,117 @@
+# Immich stack for Oracle Cloud Always Free (VM.Standard.A1.Flex, 2 OCPU / 12 GB, aarch64).
+#
+# Immich is DEPLOYED here, never rebuilt. It already implements CLIP semantic
+# search, InsightFace face recognition, mobile auto-backup, albums and sharing.
+#
+# EVERY TAG IS PINNED. Immich ships breaking changes between releases, including
+# database migrations that are not reversible. `:latest` plus an unattended pull
+# is how a photo library gets corrupted. Do NOT add Watchtower or any other
+# auto-updater. Upgrades are a deliberate act: read the release notes, take a
+# backup, then bump IMMICH_VERSION in .env and re-run.
+#
+# No ports are published to the host's public interface. Access is over
+# Tailscale only; see the `ports` binding below, which is deliberately
+# restricted to the Tailscale interface address.
+
+name: immich
+
+services:
+  immich-server:
+    container_name: immich_server
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION}
+    volumes:
+      - ${UPLOAD_LOCATION}:/data
+      - /etc/localtime:/etc/localtime:ro
+    env_file:
+      - .env
+    ports:
+      # Bound to the Tailscale interface address, never 0.0.0.0.
+      # TAILSCALE_IP is set by the Ansible role from `tailscale ip -4`.
+      - '${TAILSCALE_IP}:2283:2283'
+    depends_on:
+      redis:
+        condition: service_healthy
+      database:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      disable: false
+    # Hardening: no new privileges, and a read-only root filesystem is not
+    # possible here because Immich writes to /data, but the container does not
+    # need to escalate.
+    security_opt:
+      - no-new-privileges:true
+
+  immich-machine-learning:
+    container_name: immich_machine_learning
+    # The ML image carries the CLIP and face-recognition models. The plain tag
+    # (no -cuda/-openvino suffix) is the CPU build, which is correct for ARM.
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+    volumes:
+      - model-cache:/cache
+    env_file:
+      - .env
+    restart: always
+    healthcheck:
+      disable: false
+    security_opt:
+      - no-new-privileges:true
+    # ML inference on 2 ARM cores is the one workload that can starve the rest
+    # of the box. Cap it so a large smart-search job cannot make the server
+    # unresponsive; jobs simply take longer instead.
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 4G
+
+  redis:
+    container_name: immich_redis
+    # Valkey is the maintained open-source fork of Redis; Immich ships it as the
+    # default queue backend. Digest-pinned as well as tagged.
+    image: docker.io/valkey/valkey:8-bookworm@sha256:fea8b3e67b15729d4bb70589eb03367bab9ad1ee89c876f54327fc7c6e618571
+    healthcheck:
+      test: redis-cli ping || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+
+  database:
+    container_name: immich_postgres
+    # pgvector build maintained by the Immich project. The database is the part
+    # that cannot be regenerated from the filesystem, so it is both pinned and
+    # backed up nightly (see ops/backup/immich-backup.sh).
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_DB: ${DB_DATABASE_NAME}
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+      # Immich's own automatic database dumps land in UPLOAD_LOCATION/backups,
+      # which the restic job then captures in the same snapshot as the media.
+      DB_STORAGE_TYPE: 'HDD'
+    volumes:
+      - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
+      # Tuning for 12 GB RAM. See infra/postgres/tuning.conf for the rationale.
+      - ./postgres/tuning.conf:/etc/postgresql/conf.d/tuning.conf:ro
+    shm_size: 256mb
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: >-
+        pg_isready --dbname="$${POSTGRES_DB}" --username="$${POSTGRES_USER}" || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    command: >-
+      postgres
+      -c config_file=/etc/postgresql/postgresql.conf
+      -c include_dir=/etc/postgresql/conf.d
+
+volumes:
+  model-cache:

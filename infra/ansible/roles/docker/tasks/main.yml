@@ -1,0 +1,94 @@
+---
+# Docker Engine from Docker's own apt repository.
+#
+# Ubuntu's packaged docker.io lags badly and the compose plugin versions drift;
+# Immich's compose file uses features that want a current release.
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Fetch the Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Add the Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu
+      {{ ansible_distribution_release }} stable
+    filename: docker
+    state: present
+    update_cache: true
+
+- name: Install Docker Engine and the compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+
+- name: Configure the Docker daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: '0644'
+    # log rotation matters here: without it, container logs grow without bound
+    # on a 50 GB boot volume and eventually take the whole host down.
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        },
+        "live-restore": true,
+        "userland-proxy": false,
+        "no-new-privileges": true,
+        "icc": false
+      }
+  notify: Restart docker
+
+- name: Ensure Docker is running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create the immich service account
+  # A dedicated non-root account owns the compose project and the media tree.
+  ansible.builtin.user:
+    name: "{{ immich_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ immich_dir }}"
+    create_home: false
+
+- name: Add the immich account to the docker group
+  # Note: docker group membership is root-equivalent. It is granted here only so
+  # the backup and metrics timers can run `docker inspect` without sudo.
+  ansible.builtin.user:
+    name: "{{ immich_user }}"
+    groups: docker
+    append: true

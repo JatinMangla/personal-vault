@@ -1,0 +1,7 @@
+---
+tailscale_hostname: immich-mumbai
+
+# tailscale_auth_key has NO default. Pass it at run time:
+#   --extra-vars "tailscale_auth_key=$TS_AUTHKEY"
+# Generate an ephemeral, pre-authorized, single-use key in the Tailscale admin
+# console. Never commit it.

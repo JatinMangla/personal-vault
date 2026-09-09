@@ -1,0 +1,6 @@
+---
+- name: Restart immich
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ immich_dir }}"
+  changed_when: true
