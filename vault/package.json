@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install --with-deps chromium webkit"
+    "test:e2e:install": "playwright install --with-deps chromium webkit",
+    "check:bundle": "node scripts/check-client-bundle.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1128.0",
@@ -21,7 +22,8 @@
     "@supabase/supabase-js": "2.100.0",
     "next": "16.3.4",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",

@@ -62,3 +62,41 @@ security software). `vitest@3.2.7` predates that peer and installs cleanly.
   moderate is reported and triaged here.
 - Any new accepted advisory gets an entry above with reachability, precondition
   and a revisit trigger. "It's only moderate" is not a reason on its own.
+
+## Content-Security-Policy: the `style-src-attr` exception
+
+The deployed CSP is:
+
+```
+default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; ...
+```
+
+`script-src` is `'self'` with **no** `unsafe-inline` and **no** `unsafe-eval`,
+which is what the spec requires and what actually matters for XSS.
+
+`style-src` is also `'self'` with no `unsafe-inline`, so no attacker-supplied
+`<style>` block or stylesheet can load.
+
+The one narrow exception is `style-src-attr 'unsafe-inline'`, which permits
+inline `style` **attributes** only. Four values in this app are genuinely
+dynamic and cannot be precomputed into a class:
+
+- meter fill width (`--fill`) — the upload progress bar and every limit meter
+- storage breakdown segment width and colour (`--seg-width`, `--seg-color`)
+
+React renders these through the `style` prop, which emits a style attribute.
+Everything else was moved into utility classes in `globals.css` specifically so
+this exception could be kept to attributes rather than applying to stylesheets.
+
+What this does and does not permit:
+
+- **Does not** allow script execution, `<style>` injection, or loading external
+  stylesheets.
+- **Does** allow an attacker who already has HTML injection to set a style
+  attribute. Given HTML injection they already have far worse options, and
+  `script-src 'self'` is what stops those.
+
+To remove the exception entirely, the dynamic widths would need to be quantised
+into a fixed set of classes (say, 100 `.w-N` rules). That trades a real loss of
+precision in the gauges for a marginal security gain, so it has not been done.
+Revisit if the app ever renders untrusted HTML — at present it renders none.
