@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#
+# One-command setup, run ON the Oracle VM.
+#
+# Ansible has no Windows control node, so rather than have you drive it from a
+# laptop that cannot run it, this script installs Ansible on the VM and points
+# it at localhost. You SSH in, run this, answer one prompt.
+#
+#   bash ~/personal-vault/infra/setup-on-vm.sh
+#
+# Safe to re-run. Every step is idempotent, and it stops at the first failure
+# rather than continuing in a half-configured state.
+
+set -euo pipefail
+
+REPO_URL="${REPO_URL:-https://github.com/JatinMangla/personal-vault.git}"
+REPO_DIR="${REPO_DIR:-$HOME/personal-vault}"
+
+bold()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+info()  { printf '  %s\n' "$*"; }
+ok()    { printf '  \033[32mOK\033[0m  %s\n' "$*"; }
+warn()  { printf '  \033[33mWARN\033[0m  %s\n' "$*"; }
+die()   { printf '\n\033[31mFAILED\033[0m  %s\n\n' "$*" >&2; exit 1; }
+
+bold "1/7  Checking this machine"
+
+[[ "$(uname -m)" == "aarch64" ]] \
+  || die "Expected ARM64 (aarch64), got $(uname -m). The pinned Docker images are arm64."
+ok "architecture: aarch64"
+
+grep -qi ubuntu /etc/os-release 2>/dev/null \
+  || die "Expected Ubuntu. Found: $(grep PRETTY_NAME /etc/os-release 2>/dev/null || echo unknown)"
+ok "$(grep PRETTY_NAME /etc/os-release | cut -d'"' -f2)"
+
+cpus=$(nproc)
+mem_gb=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+info "CPU: ${cpus} | RAM: ~${mem_gb} GB"
+if (( cpus > 2 || mem_gb > 13 )); then
+  warn "This exceeds the Always Free entitlement (2 OCPU / 12 GB)."
+  warn "Oracle TERMINATES instances that exceed it. Resize down before continuing."
+  read -rp "  Continue anyway? [y/N] " a
+  [[ "${a,,}" == "y" ]] || exit 1
+fi
+
+# All media lives on the block volume. Without it, Immich fills the 50 GB boot
+# disk and takes the whole host down.
+[[ -e /dev/oracleoci/oraclevdb ]] || die "Block volume not found at /dev/oracleoci/oraclevdb.
+  Attach the 150 GB volume in the OCI console (Lower Cost / 0 VPU), then run the
+  iSCSI commands the console gives you. See infra/docs/oracle-setup.md."
+ok "block volume present"
+
+bold "2/7  Fetching the repository"
+
+sudo apt-get update -qq
+sudo apt-get install -y -qq git curl jq >/dev/null
+ok "git, curl, jq installed"
+
+if [[ -d "$REPO_DIR/.git" ]]; then
+  git -C "$REPO_DIR" pull --ff-only || warn "could not fast-forward; using existing checkout"
+  ok "repository updated at $REPO_DIR"
+else
+  git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+  ok "repository cloned to $REPO_DIR"
+fi
+
+bold "3/7  Installing Ansible"
+
+if command -v ansible-playbook >/dev/null 2>&1; then
+  ok "already installed: $(ansible --version | head -1)"
+else
+  sudo apt-get install -y -qq ansible >/dev/null
+  ok "installed: $(ansible --version | head -1)"
+fi
+
+cd "$REPO_DIR/infra/ansible"
+
+# Point Ansible at this same machine. No SSH keys or networking involved.
+{
+  echo "[immich]"
+  echo "localhost ansible_connection=local"
+  echo ""
+  echo "[immich:vars]"
+  echo "ansible_python_interpreter=/usr/bin/python3"
+} > inventory.ini
+ok "inventory configured for local execution"
+
+ansible-galaxy collection install -r requirements.yml >/dev/null 2>&1 \
+  && ok "galaxy collections installed" \
+  || warn "collection install reported a problem; continuing"
+
+bold "4/7  Credentials"
+
+echo
+echo "  A Tailscale auth key is needed. Get one at:"
+echo "    tailscale.com -> Settings -> Keys -> Generate auth key"
+echo "    Tick 'Reusable' and 'Pre-approved'."
+echo
+# -s so the key is never echoed to the terminal or left in scrollback.
+read -rsp "  Paste the Tailscale auth key: " ts_input
+echo
+[[ -n "$ts_input" ]] || die "No auth key entered."
+ok "auth key received (not displayed or logged)"
+
+# Written to a root-only temp file rather than passed on a command line, where
+# it would be visible in ps output to any user on the box.
+vault_tmp="$(mktemp)"
+chmod 600 "$vault_tmp"
+openssl rand -base64 32 > "$vault_tmp"
+trap 'rm -f "$vault_tmp"' EXIT
+ok "database credential generated"
+
+bold "5/7  Running the playbook (10-20 minutes)"
+info "Hardening the OS, installing Docker and Tailscale, mounting the volume,"
+info "and starting Immich. Safe to re-run if it fails partway."
+echo
+
+ansible-playbook -i inventory.ini playbook.yml \
+  --extra-vars "tailscale_auth_key=$ts_input" \
+  --extra-vars "immich_db_password=$(cat "$vault_tmp")" \
+  || die "The playbook failed. Read the error above, fix it, and re-run this script."
+
+unset ts_input
+ok "playbook completed"
+
+bold "6/7  Installing backup and metrics automation"
+
+sudo mkdir -p /opt/personal-vault /etc/personal-vault /var/lib/personal-vault
+sudo rsync -a "$REPO_DIR/ops/" /opt/personal-vault/ops/
+sudo chmod +x /opt/personal-vault/ops/backup/*.sh /opt/personal-vault/ops/metrics/*.sh
+ok "scripts installed to /opt/personal-vault"
+
+if [[ ! -f /etc/personal-vault/ops.env ]]; then
+  sudo install -m 0600 /dev/null /etc/personal-vault/ops.env
+  sudo tee /etc/personal-vault/ops.env >/dev/null <<'ENVEOF'
+# Fill these in, then: sudo systemctl start immich-backup.service
+# Mode 0600. Never commit this file.
+
+# --- Gozunga (S3-compatible backup target, 100 GB free, no card) ---
+GOZUNGA_ENDPOINT=
+GOZUNGA_KEY=
+GOZUNGA_SECRET=
+
+# --- healthchecks.io dead-man switches ---
+HEALTHCHECK_UUID=
+HEALTHCHECK_METRICS_UUID=
+
+# --- Metrics push to the vault dashboard ---
+# The ingest value below must EXACTLY match what is set in Vercel, or every
+# push is rejected with 401 and /status stays empty.
+METRICS_INGEST_SECRET=
+METRICS_INGEST_URL=https://vault-amber-five.vercel.app/api/metrics/ingest
+
+# --- Immich read-only API key (server.statistics, server.storage, server.about) ---
+IMMICH_API_KEY=
+IMMICH_BASE_URL=http://127.0.0.1:2283
+
+# --- Paths ---
+UPLOAD_LOCATION=/mnt/media
+STATE_DIR=/var/lib/personal-vault
+ENVEOF
+  ok "created /etc/personal-vault/ops.env (needs filling in)"
+else
+  ok "ops.env already exists, left untouched"
+fi
+
+sudo cp /opt/personal-vault/ops/systemd/*.service /etc/systemd/system/
+sudo cp /opt/personal-vault/ops/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+ok "systemd units installed (timers NOT started - see next steps)"
+
+bold "7/7  Done"
+
+ts_addr="$(tailscale ip -4 2>/dev/null | head -1 || echo 'unknown')"
+
+echo
+echo "  Immich:  http://${ts_addr}:2283      (reachable over Tailscale only)"
+echo
+echo "  Database credential - copy it into your password manager now."
+echo "  It never leaves this machine and is NOT needed to restore a backup"
+echo "  (restic captures a SQL dump, not the data directory), but you will"
+echo "  want it to open a psql session by hand."
+echo
+echo "    $(cat "$vault_tmp")"
+echo
+read -rp "  Press Enter once you have stored it... " _
+clear
+ok "credential no longer on screen"
+
+echo ""
+echo "  NEXT STEPS, in order:"
+echo ""
+echo "  1. Install Tailscale on your phone and laptop, sign in to the same"
+echo "     account, then open http://${ts_addr}:2283 and create the Immich"
+echo "     admin account."
+echo ""
+echo "  2. Apply the mandatory Immich settings - transcoding policy, HEIC"
+echo "     handling, 02:00 database backups, and a read-only API key:"
+echo "       ${REPO_DIR}/infra/docs/immich-settings.md"
+echo ""
+echo "  3. In the OCI console, DELETE every ingress rule in the security list -"
+echo "     but ONLY after confirming you can reach this box over Tailscale."
+echo "     Then verify from outside:  nmap -Pn -p- <public-ip>  (expect zero)"
+echo ""
+echo "  4. Sign up at gozunga.com (100 GB free, no credit card), then fill in:"
+echo "       sudo nano /etc/personal-vault/ops.env"
+echo ""
+echo "  5. Set the restic password, and STORE IT SOMEWHERE THAT IS NOT THIS"
+echo "     MACHINE. Losing it is identical to losing the backup. No reset."
+echo "       sudo install -m 0600 /dev/null /root/.restic-pass"
+echo "       sudo nano /root/.restic-pass"
+echo ""
+echo "  6. Start the timers, run one backup, then prove it restores:"
+echo "       sudo systemctl enable --now immich-backup.timer metrics-push.timer"
+echo "       sudo systemctl start immich-backup.service"
+echo "       sudo /opt/personal-vault/ops/backup/restore-test.sh"
+echo ""
+echo "     The restore drill is the point of the whole exercise. Until it"
+echo "     passes, your backup is a hypothesis, not a backup."
+echo ""

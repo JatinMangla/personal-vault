@@ -14,7 +14,7 @@ These were run, not assumed:
 | Check | Result |
 |---|---|
 | Crypto test suite (`npm test`) | **46/46 passing** |
-| Responsive audit (`npm run test:e2e`) | **130/130** across 5 viewports, Chromium + WebKit |
+| Responsive + hydration (`npm run test:e2e`) | **140/140** across 5 viewports, Chromium + WebKit |
 | TypeScript (`npm run typecheck`) | zero errors |
 | Production build (`npm run build`) | succeeds; 5 API routes, 3 pages |
 | Client bundle scan (`npm run check:bundle`) | clean across 12 chunks |
@@ -67,6 +67,13 @@ claim in the README is untested.
 ## What to do next, in order
 
 ### 1. Oracle Cloud (the long pole)
+
+**Once the VM exists, one command does the rest:**
+
+```bash
+git clone https://github.com/JatinMangla/personal-vault.git
+bash ~/personal-vault/infra/setup-on-vm.sh
+```
 
 **On Windows, follow `infra/docs/WINDOWS-DEPLOY.md`** — Ansible cannot run from
 a Windows laptop, so that guide runs it on the VM itself. Use

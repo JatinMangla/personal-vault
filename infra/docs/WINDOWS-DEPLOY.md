@@ -30,6 +30,26 @@ you cannot rush it.
 
 ---
 
+## The short version
+
+Steps 4 through 8 below are automated. Once you can SSH into the VM:
+
+```bash
+sudo apt update && sudo apt install -y git
+git clone https://github.com/JatinMangla/personal-vault.git
+bash ~/personal-vault/infra/setup-on-vm.sh
+```
+
+It checks the machine is the right shape, installs Ansible, runs the playbook,
+installs the backup and metrics automation, and prints exactly what to do next.
+It asks for one thing: your Tailscale auth key. Safe to re-run if anything
+fails partway.
+
+The manual walkthrough below remains accurate if you would rather do it in
+steps, or if the script stops and you need to understand where.
+
+---
+
 ## Step 1 — Create an SSH key (on Windows)
 
 ```powershell
