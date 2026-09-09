@@ -60,8 +60,11 @@ export default function LoginPage() {
     if (existing) return null;
 
     if (!passphrase || passphrase.length < 12) {
+      // Reveal the passphrase field before raising, or the user is told to
+      // enter something the form gives them no way to enter.
+      setPendingSetup(true);
       throw new Error(
-        'This account has no vault yet. Enter your encryption passphrase (12+ characters) to finish setting it up.',
+        'This account has no vault yet. Enter your encryption passphrase below (12+ characters) to finish setting it up.',
       );
     }
 
