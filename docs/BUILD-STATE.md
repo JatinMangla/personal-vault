@@ -23,6 +23,41 @@ These were run, not assumed:
 | YAML (15 files) | all parse |
 | `npm audit` | no high or critical; 2 moderate dev-only, documented |
 
+## Part 1 COMPLETE - verified with real data (2026-09-10)
+
+The document vault is live, in use, and confirmed working end to end:
+a real file was encrypted in the browser, uploaded, and downloaded back.
+
+| Verified against the live project | Result |
+|---|---|
+| Account + vault key material | 1 user, 1 `user_keys` row |
+| File uploaded | 1 row in `files`, 1 blob in `vault-files` |
+| Byte counts match | 8,810 in both the row and the blob |
+| Filename in the database | **ciphertext** - unreadable even with admin access |
+| Object key | random, leaks nothing about the file |
+| Stored MIME type | `application/octet-stream` |
+| Blind index for duplicates | present |
+| **RLS cross-user isolation** | **a different user sees 0 rows** |
+
+That last line is the spec sign-off item "a second Supabase user cannot read the
+first user's file rows (RLS verified by test, not by inspection)."
+
+### Bugs found by real use, not by the test suite
+
+Four, all in the account-setup path, all now fixed:
+
+1. CSP blocked Next's inline hydration scripts - every page hung at "Loading..."
+2. The session check had no error handling - an unreachable Supabase hung the
+   page identically, with no message
+3. `signUp()` returns no session when email confirmation is on, so key material
+   was never written - the account could sign in but never unlock
+4. The unlock screen then offered "visit /login to create one", which does
+   nothing when already signed in - a loop with no exit
+
+Root cause common to 3 and 4: the flow assumed a session always exists at
+signup. Automated coverage there remains thin because it needs a live Supabase
+auth flow; the CSP regression is now covered by 5 tests.
+
 ## Deployed and verified live (2026-09-10)
 
 Component B (document vault) is **deployed and working** at
