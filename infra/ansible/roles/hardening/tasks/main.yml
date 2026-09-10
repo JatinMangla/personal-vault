@@ -78,8 +78,14 @@
   register: sshd_reachable
 
 - name: Report sshd health
+  # Deliberately does not read match_groups: `search_regex: SSH-2.0` has no
+  # capture group, so that list is EMPTY rather than undefined - which means
+  # `default()` never fires and `| first` raises "sequence was empty". The
+  # wait_for task above succeeding is itself the proof; nothing else is needed.
   ansible.builtin.debug:
-    msg: "sshd is accepting connections and advertising {{ sshd_reachable.match_groups | default(['SSH-2.0']) | first }}"
+    msg: >-
+      sshd is accepting connections on port 22 and returned a valid
+      SSH-2.0 banner after hardening.
 
 # --- Firewall -------------------------------------------------------------
 
