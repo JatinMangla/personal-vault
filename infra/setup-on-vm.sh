@@ -61,9 +61,11 @@ fi
 bold "2/7  Fetching the repository"
 
 sudo apt-get update -qq
-# rsync is NOT present on Ubuntu Minimal images and step 6 depends on it.
-sudo apt-get install -y -qq git curl jq rsync >/dev/null
-ok "git, curl, jq, rsync installed"
+# Ubuntu Minimal ships none of these. rsync is needed by step 6; nano is needed
+# because the operator has to hand-edit /etc/personal-vault/ops.env afterwards
+# and being dropped at a prompt with no editor is a poor place to end a setup.
+sudo apt-get install -y -qq git curl jq rsync nano >/dev/null
+ok "git, curl, jq, rsync, nano installed"
 
 if [[ -d "$REPO_DIR/.git" ]]; then
   git -C "$REPO_DIR" pull --ff-only || warn "could not fast-forward; using existing checkout"
