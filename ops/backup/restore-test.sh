@@ -48,6 +48,35 @@ step()  { echo; echo "=== $* ==="; }
 ok()    { echo "  PASS  $*"; }
 bad()   { echo "  FAIL  $*"; FAILURES+=("$*"); }
 
+# An empty library is not a failed restore.
+#
+# Before any photo has been uploaded, the snapshot legitimately contains a
+# database dump and no originals. Asserting "assets > 0" there records a FAIL in
+# RESTORE-LOG.md for a backup that is provably working, which is a false
+# negative in the one audit trail that is supposed to be trustworthy.
+#
+# So the drill distinguishes two genuinely different outcomes:
+#   - the live library is empty  -> those checks are NOT APPLICABLE, and the
+#     result is PASS (DB-ONLY), which is honest about what was proven
+#   - the live library has files -> the checks are real assertions and a
+#     missing asset is a FAIL, exactly as before
+#
+# This must key off the LIVE library, never the restored copy: keying off the
+# restore would let a restore that silently produced nothing mark itself
+# not-applicable and pass. That is the failure this drill exists to catch.
+LIVE_MEDIA="${UPLOAD_LOCATION:-/mnt/media}"
+LIVE_ORIGINALS=$(find "$LIVE_MEDIA/upload" "$LIVE_MEDIA/library" -type f \
+                   ! -name '.immich' 2>/dev/null | head -1 | wc -l)
+if [[ "$LIVE_ORIGINALS" -eq 0 ]]; then
+  LIBRARY_EMPTY=true
+  echo "NOTE: the live library at $LIVE_MEDIA contains no originals yet."
+  echo "      Media checks will be reported as NOT APPLICABLE rather than failed."
+  echo "      This drill will prove the database path only. Re-run it after"
+  echo "      uploading photos to exercise the media path."
+else
+  LIBRARY_EMPTY=false
+fi
+
 cleanup() {
   step "Tearing down"
   docker compose -p "$PROJECT" -f "$DRILL_DIR/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
@@ -95,7 +124,6 @@ step "3. Verifying restored file checksums"
 
 # Spot-check three originals against the live copies. Checks integrity of the
 # restore path itself, not just that files exist.
-LIVE_MEDIA="${UPLOAD_LOCATION:-/mnt/media}"
 checked=0; matched=0
 
 while IFS= read -r restored_file; do
@@ -115,7 +143,11 @@ done < <(find "$RESTORED_MEDIA/upload" "$RESTORED_MEDIA/library" -type f \
            ! -name '.immich' 2>/dev/null | head -20)
 
 if [[ $checked -eq 0 ]]; then
-  bad "no files available to checksum - is the repository empty?"
+  if $LIBRARY_EMPTY; then
+    echo "  N/A   no originals to checksum - the live library is empty"
+  else
+    bad "no files available to checksum, but the live library has originals - the restore lost them"
+  fi
 else
   ok "$matched of $checked spot-checked originals match"
 fi
@@ -237,7 +269,14 @@ echo "  albums:  ${ALBUM_COUNT:-0}"
 echo "  faces:   ${FACE_COUNT:-0}"
 echo "  people:  ${PERSON_COUNT:-0}"
 
-[[ "${ASSET_COUNT:-0}" -gt 0 ]] && ok "assets present" || bad "no assets in the restored database"
+if [[ "${ASSET_COUNT:-0}" -gt 0 ]]; then
+  ok "assets present"
+elif $LIBRARY_EMPTY; then
+  echo "  N/A   no assets - the live library is empty, so the dump has none to carry"
+else
+  bad "no assets in the restored database, but the live library has originals"
+fi
+
 [[ "${FACE_COUNT:-0}"  -gt 0 ]] && ok "face clusters present" \
   || echo "  NOTE  no face clusters - expected only if ML has never run"
 
@@ -267,7 +306,17 @@ fi
 step "Result"
 
 FINISHED_AT="$(date -Is)"
-if [[ ${#FAILURES[@]} -eq 0 ]]; then
+if [[ ${#FAILURES[@]} -eq 0 ]] && $LIBRARY_EMPTY; then
+  # Honest about scope: the database path restored, the media path was never
+  # exercised because there was no media. Recorded distinctly so a later reader
+  # cannot mistake this for a full drill, and so the gate can require a real one.
+  RESULT="PASS (DB-ONLY)"
+  echo "RESTORE DRILL PASSED - DATABASE PATH ONLY"
+  echo
+  echo "The library was empty, so the media restore path was NOT exercised."
+  echo "Re-run this drill once photos have been uploaded. Until then the"
+  echo "durability claim covers Immich's metadata, not its originals."
+elif [[ ${#FAILURES[@]} -eq 0 ]]; then
   RESULT="PASS"
   echo "RESTORE DRILL PASSED"
 else
@@ -290,6 +339,10 @@ fi
   echo "- Snapshot: \`$SNAPSHOT\`"
   echo "- Assets: ${ASSET_COUNT:-0} | Albums: ${ALBUM_COUNT:-0} | Faces: ${FACE_COUNT:-0} | People: ${PERSON_COUNT:-0}"
   echo "- Checksums verified: ${matched:-0}/${checked:-0}"
+  if $LIBRARY_EMPTY; then
+    echo "- **Scope: database only.** The live library held no originals, so the"
+    echo "  media restore path was not exercised. Re-run after uploading photos."
+  fi
   echo "- Finished: $FINISHED_AT"
   if [[ ${#FAILURES[@]} -gt 0 ]]; then
     echo "- Failures:"

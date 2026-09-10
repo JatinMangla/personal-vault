@@ -36,6 +36,15 @@ ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/personal-vault /tmp
 ReadOnlyPaths=/mnt/media /root/.restic-pass
+
+# restic caches pack indexes under $HOME/.cache/restic by default. /root is
+# read-only here, so it logged "unable to open cache: read-only file system"
+# and fell back to a throwaway temp cache on every run - harmless, but it then
+# re-downloads index data each night instead of reusing it, which is slow and
+# spends Object Storage requests against the 50,000/month free allowance.
+# Point it at the state directory that is already writable rather than opening
+# up /root.
+Environment=RESTIC_CACHE_DIR=/var/lib/personal-vault/restic-cache
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

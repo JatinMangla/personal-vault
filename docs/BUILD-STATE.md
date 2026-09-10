@@ -111,41 +111,87 @@ The `0.0.0.0/0` TCP/22 rule was removed. Two ICMP rules were KEPT:
 
 Neither opens a service or carries data.
 
-## STILL OUTSTANDING — the backup half
+## Part 3 (backup) — RUNNING, verified against Oracle (2026-09-11)
 
-**Gozunga is unusable: it accepts online signups only from the US and Canada.**
+**Gozunga was unusable: it accepts online signups only from the US and Canada.**
 That was a specification error — the provider was chosen without checking
-regional availability, and the user reached the signup wall before it surfaced.
+regional availability, and the signup wall was reached before it surfaced.
+The target is now **Oracle Object Storage**, in the tenancy that already hosts
+the VM: no new provider, no new account, no card.
+
+The first real backup completed end to end:
+
+| Check | Result |
+|---|---|
+| Repository created | `d092faa2e3` at `ap-mumbai-1`, bucket `immich-backup` |
+| Oracle S3 credentials | **work** — this settled the open question about which key type was needed |
+| Snapshot | `577327ab`, 5 files, 17.9 MiB |
+| Retention policy | applied without error |
+| **Integrity check** | **passed** |
+| Free-tier guard | reports correctly — 0 of 10240 MiB |
+
+### The capacity gap, unchanged and still real
 
 No card-free provider offers 100 GB free in India, so the spec's $1/year ceiling
-and its "every original in two physically separate locations" rule are now in
-direct conflict. Pending a decision between:
+and its "every original in two physically separate locations" rule remain in
+direct conflict. Oracle Object Storage was chosen as the free option that at
+least protects the irreplaceable metadata:
 
 | | Cost | Offsite copy | Holds ~90 GB |
 |---|---|---|---|
 | Backblaze B2 | ~$6/year | yes | yes |
 | Home external drive only | $0 | no | manual, and the owner travels |
-| Oracle Object Storage | $0 | yes | no — 20 GB |
+| **Oracle Object Storage (chosen)** | **$0** | **yes** | **no — 10 GiB** |
 
-Until this is resolved, `immich-backup.sh` has no target, **the restore drill
-has never run**, and photos exist on exactly one disk. The dashboard and
-`thresholds.ts` still say "Gozunga" and 100 GB; those labels change once the
-provider is chosen.
+B2 was declined on cost. So the backup protects the **database dumps plus
+whatever recent originals fit**; videos and an eventually-larger library do not
+fit and live on a single disk. Stated the same way in `README.md`.
+
+### Bugs found by running it, not by review
+
+1. `ProtectHome=true` made `/root/.restic-pass` invisible to the unit — the job
+   failed claiming the file did not exist while it was plainly readable to root
+   outside the unit. Now `read-only`.
+2. `rsync -a` had copied the scripts without the executable bit → `203/EXEC`.
+3. restic could not create `/root/.cache` under `ProtectSystem=strict`, so every
+   run rebuilt its index cache from scratch. Now `RESTIC_CACHE_DIR` points into
+   the state directory that is already writable.
+4. `restic` was never installed — Ubuntu Minimal ships without it, along with
+   `rsync` and `nano`.
 
 ## Not yet verified — requires live infrastructure
 
 | Gate | Blocked on |
 |---|---|
-| **P3 restore drill** | An Oracle VM with Immich running and at least one backup |
-| P1 `nmap` zero-open-ports | A provisioned VM with a public IP |
-| P2 face recognition / semantic search | Immich running with a photo library |
-| P7 metrics arriving every 15 min | The collector running on the VM |
-| P8 free-tier ledger at $0.00 | Live accounts to check against |
+| **P3 restore drill** | **Nothing — ready to run now.** See below. |
+| P2 face recognition / semantic search | Photos being uploaded (library is empty) |
+| P8 free-tier ledger at $0.00 | A month of live billing to confirm against |
+
+P1 (`nmap` zero open ports) and P7 (metrics every 15 min) are **done** — see the
+Part 2 section above.
 
 **The restore drill is the one that matters most.** A backup that has never been
-restored is a hypothesis. `ops/backup/restore-test.sh` is written and ready, but
-until it has run and appended a PASS to `ops/RESTORE-LOG.md`, the durability
-claim in the README is untested.
+restored is a hypothesis. It has now backed up successfully, but
+`ops/RESTORE-LOG.md` still reads "No drill has run yet", so the durability claim
+in the README remains untested.
+
+### The drill against an empty library
+
+No photos have been uploaded yet. The drill originally asserted `assets > 0` and
+checksummed originals, so on an empty library it would have appended a **FAIL**
+for a backup that is provably working — a false negative in the one audit trail
+that has to be trustworthy.
+
+It now distinguishes the two cases by inspecting the **live** library (never the
+restored copy, which would let a restore that produced nothing excuse itself):
+
+- live library empty → media checks report **N/A**, result is **`PASS (DB-ONLY)`**
+- live library has originals → the checks are real assertions, as before
+
+`PASS (DB-ONLY)` is deliberately a distinct string. It records that the database
+path restored and the media path was never exercised, so it cannot later be
+mistaken for a full drill. **The gate is not fully closed until a drill runs
+against a library with photos in it.**
 
 ---
 

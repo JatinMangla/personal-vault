@@ -147,18 +147,19 @@ Each directory has its own README with the detail: `infra/README.md`,
 | Phase | Deliverable | Status |
 |---|---|---|
 | P0 | Repo, CLAUDE.md, agents, skills, hooks | **Done** — hook verified 14/14 |
-| P1 | Oracle VM, volumes, Tailscale | Automation written; needs your tenancy |
-| P2 | Immich running, hardened, tuned | Automation written; needs P1 |
-| P3 | **Backup + verified restore** (gate) | Scripts written; **drill not yet run** |
+| P1 | Oracle VM, volumes, Tailscale | **Done** — zero open ports verified from outside |
+| P2 | Immich running, hardened, tuned | **Done** — all containers healthy, Tailscale-only |
+| P3 | **Backup + verified restore** (gate) | Backup **runs and verifies**; **drill not yet run** |
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
 | P5 | Presign API + auth | **Live and in use** - real file round-tripped, RLS verified |
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 140/140, PWA installable |
-| P7 | Collector + `/status` dashboard | **Done** — needs a live VM to feed it |
-| P8 | Monitoring + final audit | Workflows written; needs live services |
+| P7 | Collector + `/status` dashboard | **Done** — live metrics arriving every 15 min |
+| P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
 
-Everything that can be built and verified without cloud accounts is done and
-tested. What remains needs your Oracle, Vercel and Supabase
-accounts — see `docs/BUILD-STATE.md` for exactly what to do next.
+All four components are deployed and running. The remaining gate is **P3**: the
+nightly backup completes and passes its integrity check, but the restore has
+never been exercised, so `ops/RESTORE-LOG.md` is still empty. A backup that has
+never been restored is a hypothesis. See `docs/BUILD-STATE.md`.
 
 ## Verifying locally
 
