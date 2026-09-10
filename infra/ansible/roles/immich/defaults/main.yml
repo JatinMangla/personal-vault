@@ -11,3 +11,12 @@ immich_timezone: Asia/Kolkata
 #   --extra-vars "immich_db_password=$(openssl rand -base64 32)"
 # A default here would end up committed, and a shared default password on a
 # database holding a personal photo archive is not acceptable.
+#
+# GENERATE IT ONCE. Postgres honours POSTGRES_PASSWORD only when it initialises
+# an EMPTY data directory; on an existing one the variable is ignored. Passing a
+# fresh password on a second run therefore hands Immich a credential the
+# database has never been given, and immich_server crash-loops with
+#   PostgresError: password authentication failed for user "postgres"
+# On a re-run, read the current value back instead:
+#   sudo sed -n 's/^DB_PASSWORD=//p' /opt/immich/.env
+# infra/setup-on-vm.sh does this automatically.

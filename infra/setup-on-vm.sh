@@ -117,9 +117,39 @@ ok "auth key received (not displayed or logged)"
 # it would be visible in ps output to any user on the box.
 vault_tmp="$(mktemp)"
 chmod 600 "$vault_tmp"
-openssl rand -base64 32 > "$vault_tmp"
 trap 'rm -f "$vault_tmp"' EXIT
-ok "database credential generated"
+
+# REUSE the existing credential if one is already in place.
+#
+# Postgres only honours POSTGRES_PASSWORD when it INITIALISES an empty data
+# directory. On an existing directory the variable is ignored entirely. So
+# generating a fresh password on every run meant the second run onwards handed
+# Immich a password the database had never been given, and immich_server
+# crash-looped with:
+#
+#   PostgresError: password authentication failed for user "postgres"
+#
+# Re-running this script must be safe, so the credential is generated exactly
+# once and reused thereafter.
+if sudo test -f /opt/immich/.env && sudo grep -q '^DB_PASSWORD=' /opt/immich/.env; then
+  sudo sed -n 's/^DB_PASSWORD=//p' /opt/immich/.env > "$vault_tmp"
+  ok "reusing the existing database credential (matches the initialised data directory)"
+else
+  openssl rand -base64 32 > "$vault_tmp"
+  ok "database credential generated"
+fi
+
+# A password mismatch here is unrecoverable without wiping the database, so
+# check for the specific case where a data directory exists but no .env does -
+# that combination means the credential is gone and Postgres cannot be reached.
+if [[ ! -s "$vault_tmp" ]]; then
+  die "Could not determine the database credential.
+  If /var/lib/immich/postgres exists but /opt/immich/.env does not, the password
+  the database was initialised with is lost. With no data yet, the fix is:
+    cd /opt/immich && sudo docker compose down -v
+    sudo rm -rf /var/lib/immich/postgres
+  then re-run this script."
+fi
 
 bold "5/7  Running the playbook (10-20 minutes)"
 info "Hardening the OS, installing Docker and Tailscale, mounting the volume,"

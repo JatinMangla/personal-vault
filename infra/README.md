@@ -73,6 +73,20 @@ ansible-playbook -i inventory.ini playbook.yml \
   --extra-vars "immich_db_password=$(openssl rand -base64 32)"
 ```
 
+> **On a RE-RUN, reuse the existing password — do not generate a new one.**
+> Postgres only honours `POSTGRES_PASSWORD` when it initialises an empty data
+> directory; on an existing one it is ignored. A fresh password on a second run
+> therefore leaves Immich crash-looping with
+> `password authentication failed for user "postgres"`. Read the current value
+> back instead:
+>
+> ```bash
+> sudo sed -n 's/^DB_PASSWORD=//p' /opt/immich/.env
+> ```
+>
+> `infra/setup-on-vm.sh` does this automatically.
+
+
 Secrets are passed at run time and never stored in the repository. Both
 variables are deliberately left without defaults so a missing one fails loudly
 rather than silently using a shared value.
