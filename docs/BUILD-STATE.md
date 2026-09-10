@@ -1,6 +1,6 @@
 # Build state and next actions
 
-Last updated: **2026-09-10**
+Last updated: **2026-09-11**
 
 Everything buildable without cloud accounts is complete and verified. What
 remains requires provisioning, which needs your credentials.
@@ -81,6 +81,56 @@ from Pune. Not worth recreating unless it becomes noticeable.
 Note: the Supabase MCP connector authorises **one organisation at a time**, so
 seeing this project required switching the connector away from the org holding
 the unrelated `stock-inventory` app.
+
+## Part 2 (Immich) — DEPLOYED AND VERIFIED (2026-09-11)
+
+Running on Oracle `immich-mumbai`, Tailscale `100.88.183.74`, public
+`152.67.1.135`.
+
+| Check | Result |
+|---|---|
+| Containers | server, postgres, ML, redis — **all healthy** |
+| Immich API | answers on the Tailscale address only |
+| Metrics collector | `api_ok: true`, 0 failed jobs, pushing every 15 min |
+| Dashboard | renders real storage, RAM, uptime, container dots |
+| healthchecks.io ping | succeeds (no `curl: (22)`) |
+| **P1: zero open ports** | **VERIFIED from outside** — 22, 80, 443, 2283, 111, 3000, 5432, 8080 all closed/filtered |
+
+Admin access is Tailscale-only, from an Android phone via Termux. There is no
+laptop dependency: the office laptop's key was deliberately not relied on, and
+a phone-generated key (`immich-phone`) is installed instead.
+
+### Ingress rules kept, deliberately
+
+The `0.0.0.0/0` TCP/22 rule was removed. Two ICMP rules were KEPT:
+
+- `0.0.0.0/0` ICMP 3,4 — Path MTU Discovery. Removing this causes a nasty
+  failure mode where small requests succeed but large transfers hang, which
+  would break photo uploads in a way that is very hard to diagnose.
+- `10.0.0.0/16` ICMP 3 — internal to the VCN only.
+
+Neither opens a service or carries data.
+
+## STILL OUTSTANDING — the backup half
+
+**Gozunga is unusable: it accepts online signups only from the US and Canada.**
+That was a specification error — the provider was chosen without checking
+regional availability, and the user reached the signup wall before it surfaced.
+
+No card-free provider offers 100 GB free in India, so the spec's $1/year ceiling
+and its "every original in two physically separate locations" rule are now in
+direct conflict. Pending a decision between:
+
+| | Cost | Offsite copy | Holds ~90 GB |
+|---|---|---|---|
+| Backblaze B2 | ~$6/year | yes | yes |
+| Home external drive only | $0 | no | manual, and the owner travels |
+| Oracle Object Storage | $0 | yes | no — 20 GB |
+
+Until this is resolved, `immich-backup.sh` has no target, **the restore drill
+has never run**, and photos exist on exactly one disk. The dashboard and
+`thresholds.ts` still say "Gozunga" and 100 GB; those labels change once the
+provider is chosen.
 
 ## Not yet verified — requires live infrastructure
 
