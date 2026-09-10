@@ -149,7 +149,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P0 | Repo, CLAUDE.md, agents, skills, hooks | **Done** — hook verified 14/14 |
 | P1 | Oracle VM, volumes, Tailscale | **Done** — zero open ports verified from outside |
 | P2 | Immich running, hardened, tuned | **Done** — all containers healthy, Tailscale-only |
-| P3 | **Backup + verified restore** (gate) | Backup **runs and verifies**; **drill not yet run** |
+| P3 | **Backup + verified restore** (gate) | Backup runs and verifies; drill **PASS (DB-ONLY)** — media path untested |
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
 | P5 | Presign API + auth | **Live and in use** - real file round-tripped, RLS verified |
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 140/140, PWA installable |
@@ -157,9 +157,11 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
 
 All four components are deployed and running. The remaining gate is **P3**: the
-nightly backup completes and passes its integrity check, but the restore has
-never been exercised, so `ops/RESTORE-LOG.md` is still empty. A backup that has
-never been restored is a hypothesis. See `docs/BUILD-STATE.md`.
+nightly backup completes and passes its integrity check, and a restore drill has
+proven the database path — an 18 MB Immich dump restored into a clean Postgres
+and served over the API. What is still unproven is whether **originals** restore
+intact, because none had been uploaded when the drill ran. Re-running the drill
+against a populated library is the last step. See `docs/BUILD-STATE.md`.
 
 ## Verifying locally
 

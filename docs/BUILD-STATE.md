@@ -163,7 +163,7 @@ fit and live on a single disk. Stated the same way in `README.md`.
 
 | Gate | Blocked on |
 |---|---|
-| **P3 restore drill** | **Nothing — ready to run now.** See below. |
+| **P3 restore drill** | **Photos.** DB path passed 2026-09-10; media path needs a non-empty library. |
 | P2 face recognition / semantic search | Photos being uploaded (library is empty) |
 | P8 free-tier ledger at $0.00 | A month of live billing to confirm against |
 
@@ -171,9 +171,17 @@ P1 (`nmap` zero open ports) and P7 (metrics every 15 min) are **done** — see t
 Part 2 section above.
 
 **The restore drill is the one that matters most.** A backup that has never been
-restored is a hypothesis. It has now backed up successfully, but
-`ops/RESTORE-LOG.md` still reads "No drill has run yet", so the durability claim
-in the README remains untested.
+restored is a hypothesis. It ran on 2026-09-10 and returned `PASS (DB-ONLY)` in
+38 seconds:
+
+- Oracle credentials authenticated, repository opened
+- Snapshot `577327ab` restored — 12 files, 17.919 MiB
+- The 18 MB dump `immich-db-backup-20260911T020000-v3.1.0-pg14.19.sql.gz`
+  restored into a clean Postgres 14 under `ON_ERROR_STOP=1`, no errors
+- Immich v3.1.0 started against it and answered its API
+
+So the metadata half of the durability claim is now tested rather than assumed.
+The media half is not, and cannot be until originals exist.
 
 ### The drill against an empty library
 
