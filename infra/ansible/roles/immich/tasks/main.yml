@@ -94,11 +94,19 @@
 - name: Create the Postgres data directory on the boot volume
   # Deliberately NOT on the block volume: Postgres wants low-latency random
   # I/O, and the block volume is provisioned for large sequential reads.
+  #
+  # OWNERSHIP MATTERS. This is bind-mounted into the container, and the postgres
+  # user inside that image is UID/GID 999. Creating it root:root 0700 - as an
+  # earlier version did - left the server unable to read its own files:
+  #
+  #   FATAL: could not open file "global/pg_filenode.map": Permission denied
+  #
+  # 0700 is still correct for the mode; only the owner was wrong.
   ansible.builtin.file:
     path: "{{ db_data_location }}"
     state: directory
-    owner: root
-    group: root
+    owner: '999'
+    group: '999'
     mode: '0700'
 
 # --- Compose project ------------------------------------------------------
@@ -106,14 +114,6 @@
 - name: Create the Immich project directory
   ansible.builtin.file:
     path: "{{ immich_dir }}"
-    state: directory
-    owner: "{{ immich_user }}"
-    group: "{{ immich_user }}"
-    mode: '0750'
-
-- name: Create the postgres config directory
-  ansible.builtin.file:
-    path: "{{ immich_dir }}/postgres"
     state: directory
     owner: "{{ immich_user }}"
     group: "{{ immich_user }}"
@@ -244,7 +244,28 @@
   loop_control:
     label: "{{ item.key }} = {{ item.value }}"
   changed_when: true
+  register: alter_system
+  failed_when: false
   notify: Restart immich
+
+- name: Show Postgres logs if the tuning could not be applied
+  # Without this the failure is the same connection error repeated once per
+  # setting - 19 identical walls of text and no cause. The reason is in the
+  # container log.
+  ansible.builtin.command:
+    cmd: docker logs --tail 30 immich_postgres
+  register: pg_logs
+  changed_when: false
+  when: alter_system is failed or (alter_system.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | list | length) > 0
+
+- name: Fail with the Postgres logs attached
+  ansible.builtin.fail:
+    msg: |
+      Could not apply Postgres tuning.
+
+      {{ pg_logs.stdout | default('') }}
+      {{ pg_logs.stderr | default('') }}
+  when: (alter_system.results | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0) | list | length) > 0
 
 - name: Reload Postgres so the tuning takes effect
   # Most of these are reload-safe; shared_buffers and max_connections need a
