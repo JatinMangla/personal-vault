@@ -64,8 +64,11 @@ sudo apt-get update -qq
 # Ubuntu Minimal ships none of these. rsync is needed by step 6; nano is needed
 # because the operator has to hand-edit /etc/personal-vault/ops.env afterwards
 # and being dropped at a prompt with no editor is a poor place to end a setup.
-sudo apt-get install -y -qq git curl jq rsync nano >/dev/null
-ok "git, curl, jq, rsync, nano installed"
+# restic is the backup engine itself - ops/backup/immich-backup.sh fails with
+# "restic: command not found" (exit 127) without it, and Ubuntu Minimal ships
+# none of these.
+sudo apt-get install -y -qq git curl jq rsync nano restic >/dev/null
+ok "git, curl, jq, rsync, nano, restic installed"
 
 if [[ -d "$REPO_DIR/.git" ]]; then
   git -C "$REPO_DIR" pull --ff-only || warn "could not fast-forward; using existing checkout"
