@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
-# Nightly Immich backup: restic -> Gozunga (S3-compatible, 100 GB free tier).
+# Nightly Immich backup: restic -> Oracle Object Storage (S3-compatible).
+#
+# ~10 GiB free tier. Too small for a full library: this protects the database
+# dumps and recent originals, NOT every photo. See README.md for the gap.
 #
 # Runs at 03:00 via systemd timer, one hour after Immich's own 02:00 database
 # dump, so every snapshot contains a dump that is at most an hour old and is
@@ -17,7 +20,7 @@
 #   encoded-video/  derived; the original is never removed
 #   *.mp4/*.mov/... video originals go to the home external drive instead
 #
-# The exclusions are the entire reason this fits in a 100 GB free tier: the
+# The exclusions are the entire reason this fits in a ~10 GiB free tier: the
 # repository only ever holds originals, never derived data.
 #
 # THE DATABASE IS NOT OPTIONAL. Immich stores every file path, album, face
@@ -25,7 +28,7 @@
 # folder to rediscover them. Media without the database restores as a heap of
 # undifferentiated files.
 #
-# restic encrypts client-side, so Gozunga only ever holds ciphertext.
+# restic encrypts client-side, so Oracle only ever holds ciphertext.
 #
 # THE RESTIC PASSWORD MUST BE STORED SOMEWHERE THAT IS NOT THIS MACHINE.
 # Losing it is identical to losing the backup. See ops/README.md.
@@ -48,10 +51,26 @@ MEDIA_DIR="${UPLOAD_LOCATION:-/mnt/media}"
 STATE_DIR="${STATE_DIR:-/var/lib/personal-vault}"
 LOG_TAG="immich-backup"
 
-export RESTIC_REPOSITORY="s3:https://${GOZUNGA_ENDPOINT}/immich-backup"
+# --- Oracle Object Storage (S3-compatible) --------------------------------
+#
+# Replaces Gozunga, which accepts online signups only from the US and Canada.
+# This lives in the tenancy that already hosts the VM: no new provider, no new
+# account, no card.
+#
+# CAPACITY IS THE CONSTRAINT. 10 GiB of Standard tier while the Free Trial is
+# active, ~20 GB combined once the tenancy falls back to Always Free. That will
+# NOT hold a photo library. What it protects is the part that cannot be
+# regenerated - Immich's database dumps - plus whatever recent originals fit.
+# Videos and older photos remain on a single disk. Stated plainly in README.md.
+#
+# Endpoint: https://<namespace>.compat.objectstorage.<region>.oraclecloud.com
+export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/root/.restic-pass}"
-export AWS_ACCESS_KEY_ID="${GOZUNGA_KEY}"
-export AWS_SECRET_ACCESS_KEY="${GOZUNGA_SECRET}"
+export AWS_ACCESS_KEY_ID="${OCI_ACCESS_KEY}"
+export AWS_SECRET_ACCESS_KEY="${OCI_SECRET_KEY}"
+# Oracle's S3 layer requires SigV4 with a real region; it rejects the bare
+# us-east-1 default that some tools assume.
+export AWS_DEFAULT_REGION="${OCI_REGION}"
 
 mkdir -p "$STATE_DIR"
 
@@ -120,6 +139,27 @@ if ! restic snapshots --no-lock >/dev/null 2>&1; then
 fi
 
 # --- Backup ---------------------------------------------------------------
+
+# --- Free-tier guard ------------------------------------------------------
+#
+# Oracle deletes ALL objects in the tenancy if it is over its storage limit
+# when the Free Trial ends. A backup that silently grows past the cap is
+# therefore worse than one that refuses to run, so check before writing.
+FREE_TIER_BYTES="${OCI_FREE_TIER_BYTES:-10737418240}"
+GUARD_PCT="${OCI_GUARD_PCT:-85}"
+
+if restic stats --mode raw-data --json > "$STATE_DIR/size-check.json" 2>/dev/null; then
+  repo_now=$(jq -r '.total_size // 0' < "$STATE_DIR/size-check.json" 2>/dev/null || echo 0)
+  guard_at=$(( FREE_TIER_BYTES * GUARD_PCT / 100 ))
+  log "repository at $(( repo_now / 1048576 )) MiB of $(( FREE_TIER_BYTES / 1048576 )) MiB free tier"
+  if (( repo_now > guard_at )); then
+    err "repository has passed ${GUARD_PCT}% of the free tier. Refusing to grow it."
+    err "Prune old snapshots or move to a larger target. Oracle deletes ALL objects"
+    err "if the tenancy is over its limit when the Free Trial ends."
+    exit 1
+  fi
+fi
+rm -f "$STATE_DIR/size-check.json"
 
 log "running restic backup"
 restic backup "$MEDIA_DIR" \

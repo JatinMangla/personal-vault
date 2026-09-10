@@ -4,7 +4,7 @@
 >
 > **Losing the restic password is identical to losing the backup.** restic
 > encrypts client-side; there is no recovery path, no support ticket, and no
-> reset. Gozunga holds ciphertext they cannot decrypt either.
+> reset. Oracle holds ciphertext they cannot decrypt either.
 >
 > Store it in **at least two** places that are not the Oracle VM:
 >
@@ -22,7 +22,7 @@
 ```
 ops/
 ├── backup/
-│   ├── immich-backup.sh     Nightly restic -> Gozunga. Excludes derived data.
+│   ├── immich-backup.sh     Nightly restic -> Oracle OS. Excludes derived data.
 │   ├── restore-test.sh      The P3 gate. Proves the backup actually restores.
 │   └── video-sync.sh        Monthly pull to a home external drive.
 ├── metrics/
@@ -68,7 +68,7 @@ systemctl list-timers 'immich-backup*' 'metrics-push*'
 | `*.mp4`, `*.mov`, … | no | Bulk of the gigabytes; goes to the home drive |
 
 Excluding the two derived directories is the entire reason the repository fits
-inside Gozunga's 100 GB free tier — it only ever holds originals. Immich's own
+inside Oracle's ~10 GiB free tier — it only ever holds originals. Immich's own
 template backup script excludes exactly these two.
 
 **The database is not optional.** Immich stores every file path, album, face
@@ -161,8 +161,8 @@ systemctl list-timers 'immich-backup*' 'metrics-push*'
 journalctl -u immich-backup.service -n 50
 
 # Snapshots
-sudo restic -r "s3:https://$GOZUNGA_ENDPOINT/immich-backup" snapshots
+sudo restic -r "s3:https://$OCI_NAMESPACE.compat.objectstorage.$OCI_REGION.oraclecloud.com/$OCI_BUCKET" snapshots
 
 # Full integrity check (slow; the nightly job reads a 1% subset)
-sudo restic -r "s3:https://$GOZUNGA_ENDPOINT/immich-backup" check --read-data
+sudo restic -r "s3:https://$OCI_NAMESPACE.compat.objectstorage.$OCI_REGION.oraclecloud.com/$OCI_BUCKET" check --read-data
 ```

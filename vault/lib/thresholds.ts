@@ -36,8 +36,12 @@ export const LIMITS = {
   blockVolumeBytes: 150 * GB,
   /** Supabase Storage free tier (file storage). */
   storageBytes: 1 * GB,
-  /** Gozunga free tier, the restic repository. */
-  gozungaBytes: 100 * GB,
+  /**
+   * Oracle Object Storage free tier, holding the restic repository.
+   * 10 GiB of Standard tier during the Free Trial; ~20 GB combined once the
+   * tenancy falls back to Always Free. Sized to the smaller, current figure.
+   */
+  backupRepoBytes: 10 * GB,
   /** Supabase free tier Postgres. */
   supabaseBytes: 500 * MB,
   /** Instance RAM. */
@@ -59,7 +63,7 @@ const PERCENT_RULES = {
   blockVolume: { amberAt: 0.70, redAt: 0.85 },
   bootVolume: { amberAt: 0.70, redAt: 0.85 },
   storage: { amberAt: 0.60, redAt: 0.85 },
-  gozunga: { amberAt: 0.70, redAt: 0.90 },
+  backupRepo: { amberAt: 0.70, redAt: 0.90 },
   supabase: { amberAt: 0.50, redAt: 0.80 },
   ram: { amberAt: 0.80, redAt: 0.92 },
 } as const satisfies Record<string, PercentRule>;

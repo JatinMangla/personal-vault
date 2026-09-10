@@ -9,7 +9,7 @@ Four components, one monorepo:
 |---|---|---|---|
 | **A** | Media engine | Immich, **deployed** not rebuilt | Oracle Cloud Always Free (Mumbai) |
 | **B** | Document vault | End-to-end encrypted, **built here** | Vercel + Supabase (DB + Storage) |
-| **C** | Backup & ops | restic, systemd, restore drills | Oracle VM → Gozunga |
+| **C** | Backup & ops | restic, systemd, restore drills | Oracle VM → Oracle Object Storage |
 | **D** | Health dashboard | Push-based metrics at `/status` | Oracle collector → Vercel → Supabase |
 
 ---
@@ -29,18 +29,43 @@ store it somewhere physical.** If you lose both, the files are unrecoverable.
 That is the correct behaviour of an encrypted system, not a bug. It is the same
 property that makes the encryption meaningful.
 
-### 2. Videos are unprotected between monthly drive connections
+### 2. The photo backup is partial, not a full second copy
 
-Photos and documents are backed up nightly to Gozunga. **Videos are not.** They
-are the bulk of the gigabytes and will not fit any free tier, so they are copied
-to an external drive at home, manually, monthly.
+The nightly restic job writes to **Oracle Object Storage**, which gives ~10 GiB
+free during the Free Trial and ~20 GB combined once the tenancy falls back to
+Always Free. That will **not** hold a photo library.
 
-If the Oracle box dies three weeks after your last sync, **up to three weeks of
-video is gone.**
+What it protects:
 
-The paid alternative is roughly **$8/year on Backblaze B2**. This gap is a
-deliberate trade-off to hold the $1/year ceiling, not an oversight. If your video
-archive is worth more than $8/year to you, take the B2 option.
+- **Immich's PostgreSQL dumps** — small, and the thing that turns a restore into
+  an actual library with albums and faces rather than a heap of unsorted files
+- **Whatever recent originals fit** inside the remaining space
+
+What it does **not** protect:
+
+- **Videos** — excluded outright; they are the bulk of the gigabytes
+- **Older photos**, once the library outgrows the free tier
+
+Those live on the Oracle block volume and nowhere else. **If that volume fails,
+they are gone.** The `video-sync.sh` script copies videos to an external drive at
+home, but that is manual and requires being at home with the drive connected.
+
+The original plan used Gozunga's 100 GB free tier. Gozunga accepts online
+registrations only from the United States and Canada, so it is unavailable here —
+a specification error, caught only when the signup was attempted.
+
+No card-free provider offers 100 GB free in this region, which puts the $1/year
+ceiling and the "every original in two physically separate locations" rule in
+direct conflict. Oracle Object Storage was chosen as the free option that at
+least protects the irreplaceable metadata.
+
+**The paid fix is roughly $6/year on Backblaze B2**, which would hold the whole
+library and close this gap properly.
+
+> ⚠️ Oracle **deletes every object** in a tenancy that is over its storage limit
+> when the Free Trial ends. `immich-backup.sh` therefore refuses to run once the
+> repository passes 85% of the configured free tier, rather than growing past it
+> silently.
 
 ---
 
@@ -86,7 +111,7 @@ No developer account is needed. Nothing is submitted or reviewed.
 | Supabase Storage | 1 GB files, 5 GB/mo egress | < 1 GB | Low — no card on file | Soft limit refuses uploads at 90% |
 | Vercel Hobby | 100 GB transfer | < 1 GB | Very low — files bypass Vercel | Presigned URLs only |
 | Supabase | 500 MB Postgres | < 50 MB | Low | Metadata only, no blobs |
-| Gozunga | 100 GB storage | 60–90 GB | Egress $5/TB on restore | Photos and docs only, no video |
+| Oracle Object Storage | 10 GiB (Trial) / ~20 GB (Always Free) | < 8 GiB | Objects DELETED if over limit at trial end | Script refuses to back up past 85% |
 | Tailscale | 3 users / 100 devices | 1 / ~4 | None | — |
 | GitHub Actions | 2,000 min/mo | < 100 min | None | — |
 | healthchecks.io | 20 checks | 2 | None | — |
@@ -132,7 +157,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P8 | Monitoring + final audit | Workflows written; needs live services |
 
 Everything that can be built and verified without cloud accounts is done and
-tested. What remains needs your Oracle, Vercel, Supabase and Gozunga
+tested. What remains needs your Oracle, Vercel and Supabase
 accounts — see `docs/BUILD-STATE.md` for exactly what to do next.
 
 ## Verifying locally

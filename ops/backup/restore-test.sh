@@ -27,10 +27,11 @@ fi
 # shellcheck source=/dev/null
 set -a; source "$ENV_FILE"; set +a
 
-export RESTIC_REPOSITORY="s3:https://${GOZUNGA_ENDPOINT}/immich-backup"
+export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/root/.restic-pass}"
-export AWS_ACCESS_KEY_ID="${GOZUNGA_KEY}"
-export AWS_SECRET_ACCESS_KEY="${GOZUNGA_SECRET}"
+export AWS_ACCESS_KEY_ID="${OCI_ACCESS_KEY}"
+export AWS_SECRET_ACCESS_KEY="${OCI_SECRET_KEY}"
+export AWS_DEFAULT_REGION="${OCI_REGION}"
 
 SNAPSHOT="${1:-latest}"
 DRILL_DIR="$(mktemp -d /tmp/restore-drill.XXXXXX)"

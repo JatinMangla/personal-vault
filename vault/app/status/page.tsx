@@ -113,7 +113,7 @@ export default function StatusPage() {
   const blockState = percentState('blockVolume', payload.storage.block_used, payload.storage.block_total);
   const bootState = percentState('bootVolume', payload.storage.boot_used, payload.storage.boot_total);
   const ramState = percentState('ram', payload.system.mem_used, payload.system.mem_total);
-  const gozungaState = percentState('gozunga', payload.backup.repo_bytes, LIMITS.gozungaBytes);
+  const backupRepoState = percentState('backupRepo', payload.backup.repo_bytes, LIMITS.backupRepoBytes);
 
   const backupState = backupAgeState(payload.backup.last_backup_ts * 1000);
   const drillState = restoreDrillState(payload.backup.last_drill_ts * 1000);
@@ -133,7 +133,7 @@ export default function StatusPage() {
     blockState,
     bootState,
     ramState,
-    gozungaState,
+    backupRepoState,
     backupState,
     drillState,
     jobsState,
@@ -235,10 +235,10 @@ export default function StatusPage() {
         />
         <div className="mt-075">
           <LimitMeter
-            label="Gozunga repository"
+            label="Backup repository"
             used={payload.backup.repo_bytes}
-            limit={LIMITS.gozungaBytes}
-            state={gozungaState}
+            limit={LIMITS.backupRepoBytes}
+            state={backupRepoState}
           />
         </div>
         {drillState === 'red' && (
@@ -276,7 +276,7 @@ export default function StatusPage() {
       </HealthCard>
 
       {/* 5. Free-tier ledger — cards, never a table. See note below. */}
-      <FreeTierLedger payload={payload} blockState={blockState} gozungaState={gozungaState} />
+      <FreeTierLedger payload={payload} blockState={blockState} backupRepoState={backupRepoState} />
 
       {/* 6. Projection */}
       <HealthCard title="Projection">
@@ -313,11 +313,11 @@ export default function StatusPage() {
 function FreeTierLedger({
   payload,
   blockState,
-  gozungaState,
+  backupRepoState,
 }: {
   payload: MetricsPayload;
   blockState: HealthState;
-  gozungaState: HealthState;
+  backupRepoState: HealthState;
 }) {
   const rows = [
     {
@@ -328,10 +328,10 @@ function FreeTierLedger({
       note: 'Keep at 0 VPU — raising the tier is billable',
     },
     {
-      label: 'Gozunga backup',
+      label: 'Oracle Object Storage backup',
       used: payload.backup.repo_bytes,
-      limit: LIMITS.gozungaBytes,
-      state: gozungaState,
+      limit: LIMITS.backupRepoBytes,
+      state: backupRepoState,
       note: 'Photos and documents only, never video',
     },
   ];

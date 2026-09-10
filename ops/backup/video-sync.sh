@@ -2,7 +2,7 @@
 #
 # Monthly video sync: Oracle -> home external drive, over Tailscale.
 #
-# Videos are excluded from the restic/Gozunga repository because they are the
+# Videos are excluded from the restic repository because they are the
 # bulk of the gigabytes and will not fit any free tier. They go to a drive at
 # home instead.
 #

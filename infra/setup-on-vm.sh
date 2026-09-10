@@ -180,10 +180,18 @@ if [[ ! -f /etc/personal-vault/ops.env ]]; then
 # Fill these in, then: sudo systemctl start immich-backup.service
 # Mode 0600. Never commit this file.
 
-# --- Gozunga (S3-compatible backup target, 100 GB free, no card) ---
-GOZUNGA_ENDPOINT=
-GOZUNGA_KEY=
-GOZUNGA_SECRET=
+# --- Oracle Object Storage, S3-compatible backup target ---
+# Namespace: Profile -> Tenancy -> Object Storage Namespace
+# Keys:      Profile -> User settings -> Customer secret keys
+OCI_NAMESPACE=
+OCI_REGION=ap-mumbai-1
+OCI_BUCKET=immich-backup
+OCI_ACCESS_KEY=
+OCI_SECRET_KEY=
+# Refuse to grow the repo past this share of the free tier. Oracle deletes
+# ALL objects if the tenancy exceeds its limit when the Free Trial ends.
+OCI_FREE_TIER_BYTES=10737418240
+OCI_GUARD_PCT=85
 
 # --- healthchecks.io dead-man switches ---
 # The UUID ONLY - not the full ping URL. The scripts prepend
@@ -262,7 +270,8 @@ echo "  3. In the OCI console, DELETE every ingress rule in the security list -"
 echo "     but ONLY after confirming you can reach this box over Tailscale."
 echo "     Then verify from outside:  nmap -Pn -p- <public-ip>  (expect zero)"
 echo ""
-echo "  4. Sign up at gozunga.com (100 GB free, no credit card), then fill in:"
+echo "  4. Create an Object Storage bucket and Customer secret keys in OCI,"
+echo "     then fill in:"
 echo "       sudo nano /etc/personal-vault/ops.env"
 echo ""
 echo "  5. Set the restic password, and STORE IT SOMEWHERE THAT IS NOT THIS"

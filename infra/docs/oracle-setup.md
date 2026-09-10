@@ -127,7 +127,8 @@ nmap -Pn -p- <public-ip>     # expect: zero open ports
 
 Oracle's automatic boot volume backup policies consume block storage that counts
 against the 200 GB free allowance. Leave the boot volume backup policy set to
-**None**. Durability comes from restic to Gozunga (see `ops/`), not from Oracle
+**None**. Durability comes from restic to Oracle Object Storage (see `ops/`),
+not from Oracle
 snapshots, and an accidental snapshot policy is a quiet way to exceed the free
 tier.
 

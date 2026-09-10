@@ -49,7 +49,7 @@ volume detail page.
 `thumbs/` and `encoded-video/` are excluded from backup because they are derived
 data that Immich regenerates on demand, and they are a large fraction of total
 bytes. Immich's own template backup script excludes exactly these two. This
-exclusion is the entire reason the backup fits inside Gozunga's 100 GB free
+exclusion is the entire reason the backup fits inside Oracle's ~10 GiB free
 tier: the repository only ever holds originals.
 
 `backups/` is **not** optional. Immich stores every file path, album, face

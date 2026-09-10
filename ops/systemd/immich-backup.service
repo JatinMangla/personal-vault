@@ -1,5 +1,5 @@
 [Unit]
-Description=Immich nightly backup to Gozunga via restic
+Description=Immich nightly backup to Oracle Object Storage via restic
 Documentation=file:///opt/personal-vault/ops/README.md
 # Needs the media volume mounted and the network up. Without the RequiresMountsFor
 # line a failed volume attach would let the job run against an empty directory.
