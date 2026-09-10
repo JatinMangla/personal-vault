@@ -203,6 +203,66 @@
   delay: 5
   changed_when: false
 
+- name: Load only vchord, not the dead pgvecto.rs worker
+  # The image's config templates set
+  #   shared_preload_libraries = 'vchord.so, vectors.so'
+  # but Immich DROPPED pgvecto.rs support at v3.0 and never creates the
+  # `vectors` extension. Confirmed on a real deployment: pg_extension holds
+  # vchord + vector + plpgsql, with no `vectors` entry.
+  #
+  # So vectors.so is preloaded with nothing to attach to. Its background worker
+  # dies, the IPC channel closes, and errors accumulate until Postgres aborts:
+  #
+  #   pgvecto.rs: IPC connection is closed unexpected.
+  #   PANIC: ERRORDATA_STACK_SIZE exceeded
+  #   server process was terminated by signal 6: Aborted
+  #
+  # Immich's docs are explicit that v3 wants `shared_preload_libraries =
+  # 'vchord.so'`. ALTER SYSTEM writes postgresql.auto.conf, which is read AFTER
+  # the image's template - so this overrides it without replacing the config,
+  # the approach that broke this container twice already.
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      psql -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+      -c "ALTER SYSTEM SET shared_preload_libraries = 'vchord.so';"
+  register: set_preload
+  changed_when: set_preload.rc == 0
+
+- name: Restart Postgres so the preload change takes effect
+  # shared_preload_libraries is restart-only; a reload will not apply it.
+  ansible.builtin.command:
+    cmd: docker restart immich_postgres
+  changed_when: true
+
+- name: Wait for Postgres to come back after the restart
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      pg_isready -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+  register: pg_ready_after_restart
+  until: pg_ready_after_restart.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Confirm only vchord is preloaded
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      psql -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+      -tAc "show shared_preload_libraries;"
+  register: preload_check
+  changed_when: false
+  failed_when: "'vectors.so' in preload_check.stdout"
+
+- name: Report the loaded libraries
+  ansible.builtin.debug:
+    msg: "shared_preload_libraries = {{ preload_check.stdout | trim }}"
+
 - name: Apply Postgres tuning via ALTER SYSTEM
   # ALTER SYSTEM writes postgresql.auto.conf, which Postgres reads AFTER its
   # main config. That leaves the image's own startup settings intact - notably

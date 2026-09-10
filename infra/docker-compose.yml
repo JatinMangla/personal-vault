@@ -91,10 +91,16 @@ services:
       POSTGRES_DB: ${DB_DATABASE_NAME}
       POSTGRES_INITDB_ARGS: '--data-checksums'
       # Selects which of the image's bundled config templates is used
-      # (postgresql.hdd.conf vs postgresql.ssd.conf). Those templates are what
-      # set `shared_preload_libraries = vchord.so, vectors.so` - without this
-      # the extensions never load and immich_server crash-loops with
+      # (postgresql.hdd.conf vs postgresql.ssd.conf). Those templates set
+      # `shared_preload_libraries = 'vchord.so, vectors.so'` - without this
+      # variable neither loads and immich_server crash-loops with
       # "vchord must be loaded via shared_preload_libraries".
+      #
+      # NOTE: roles/immich then narrows that to 'vchord.so' alone via
+      # ALTER SYSTEM. Immich dropped pgvecto.rs at v3.0 and never creates the
+      # `vectors` extension, so preloading vectors.so starts a background worker
+      # with nothing to attach to - it dies and takes Postgres down with it.
+      #
       # HDD is correct here: the block volume is 0 VPU, tuned for sequential I/O.
       DB_STORAGE_TYPE: 'HDD'
     volumes:
