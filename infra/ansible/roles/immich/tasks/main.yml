@@ -191,14 +191,99 @@
       {{ container_logs.stdout | default('no logs captured') }}
   when: compose_up.rc != 0
 
+- name: Wait for Postgres to accept connections
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      pg_isready -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+  register: pg_ready
+  until: pg_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+- name: Apply Postgres tuning via ALTER SYSTEM
+  # ALTER SYSTEM writes postgresql.auto.conf, which Postgres reads AFTER its
+  # main config. That leaves the image's own startup settings intact - notably
+  # shared_preload_libraries, which loads the vchord extension Immich's search
+  # depends on.
+  #
+  # Overriding `command:` to pass these as -c flags instead does apply the
+  # tuning, but silently drops shared_preload_libraries and leaves
+  # immich_server crash-looping. Learned the hard way.
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      psql -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+      -c "ALTER SYSTEM SET {{ item.key }} = '{{ item.value }}';"
+  loop:
+    # Sized for 12 GB RAM. See infra/postgres/tuning.conf for the reasoning.
+    - { key: shared_buffers, value: 3GB }
+    - { key: effective_cache_size, value: 8GB }
+    - { key: work_mem, value: 32MB }
+    - { key: maintenance_work_mem, value: 512MB }
+    - { key: max_wal_size, value: 2GB }
+    - { key: min_wal_size, value: 512MB }
+    - { key: wal_compression, value: 'on' }
+    - { key: checkpoint_completion_target, value: '0.9' }
+    # Network-attached SSD: the default random_page_cost of 4.0 assumes spinning
+    # disks and pushes the planner away from the index scans pgvector needs.
+    - { key: random_page_cost, value: '1.1' }
+    - { key: effective_io_concurrency, value: '200' }
+    # Only 2 OCPUs, shared with the ML container.
+    - { key: max_worker_processes, value: '4' }
+    - { key: max_parallel_workers, value: '2' }
+    - { key: max_parallel_workers_per_gather, value: '1' }
+    - { key: max_parallel_maintenance_workers, value: '1' }
+    - { key: max_connections, value: '50' }
+    - { key: autovacuum_max_workers, value: '2' }
+    - { key: autovacuum_naptime, value: 30s }
+    - { key: log_min_duration_statement, value: '2000' }
+  loop_control:
+    label: "{{ item.key }} = {{ item.value }}"
+  changed_when: true
+  notify: Restart immich
+
+- name: Reload Postgres so the tuning takes effect
+  # Most of these are reload-safe; shared_buffers and max_connections need a
+  # restart, which the handler above performs at the end of the play.
+  ansible.builtin.command:
+    cmd: >-
+      docker exec immich_postgres
+      psql -U {{ immich_db_username | default('postgres') }}
+      -d {{ immich_db_name | default('immich') }}
+      -c "SELECT pg_reload_conf();"
+  changed_when: true
+
 - name: Wait for the Immich API to answer
   ansible.builtin.uri:
     url: "http://{{ tailscale_ip }}:2283/api/server/ping"
     status_code: 200
   register: immich_ping
-  retries: 30
+  # 60 x 10s = 10 minutes. A first boot runs database migrations and builds the
+  # vector indexes, which is slow on 2 ARM cores; 5 minutes was not enough.
+  retries: 60
   delay: 10
   until: immich_ping.status == 200
+  failed_when: false
+
+- name: Show immich_server logs if the API never answered
+  ansible.builtin.command:
+    cmd: docker logs --tail 40 immich_server
+  register: server_logs
+  changed_when: false
+  when: immich_ping.status != 200
+
+- name: Fail with the server logs attached
+  ansible.builtin.fail:
+    msg: |
+      Immich started but its API never answered on port 2283.
+
+      {{ server_logs.stdout | default('no logs captured') }}
+      {{ server_logs.stderr | default('') }}
+  when: immich_ping.status != 200
 
 - name: Report the access URL
   ansible.builtin.debug:

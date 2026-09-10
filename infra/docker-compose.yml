@@ -90,6 +90,13 @@ services:
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_DB: ${DB_DATABASE_NAME}
       POSTGRES_INITDB_ARGS: '--data-checksums'
+      # Selects which of the image's bundled config templates is used
+      # (postgresql.hdd.conf vs postgresql.ssd.conf). Those templates are what
+      # set `shared_preload_libraries = vchord.so, vectors.so` - without this
+      # the extensions never load and immich_server crash-loops with
+      # "vchord must be loaded via shared_preload_libraries".
+      # HDD is correct here: the block volume is 0 VPU, tuned for sequential I/O.
+      DB_STORAGE_TYPE: 'HDD'
     volumes:
       - ${DB_DATA_LOCATION}:/var/lib/postgresql/data
     shm_size: 256mb
@@ -101,37 +108,24 @@ services:
     # tests less, not more.
     healthcheck:
       disable: false
-    # Tuning for 12 GB RAM, passed as command-line flags.
+    # NO `command:` OVERRIDE - deliberately.
     #
-    # An earlier version of this file mounted postgres/tuning.conf and pointed
-    # `-c config_file=` at /etc/postgresql/postgresql.conf. That is a Debian
-    # layout path which does NOT exist in this image, so Postgres exited
-    # immediately and the container never became healthy. Immich's own compose
-    # file overrides no command at all.
+    # Two earlier attempts both broke this container:
+    #   1. `-c config_file=/etc/postgresql/postgresql.conf` - a Debian path that
+    #      does not exist in this image, so Postgres exited immediately.
+    #   2. Tuning passed as `-c` flags - this replaced the image's own startup
+    #      configuration, dropping `shared_preload_libraries = vchord.so`.
+    #      Postgres then started fine but immich_server crash-looped with
+    #      "vchord must be loaded via shared_preload_libraries".
     #
-    # Flags are applied after the image's defaults and need no file to exist,
-    # so the tuning survives without depending on the image's directory layout.
+    # The image selects a bundled config template based on DB_STORAGE_TYPE and
+    # that template carries the preload settings Immich's vector search needs.
+    # Immich's own compose file overrides nothing here, and neither do we.
+    #
+    # Postgres tuning is applied instead by roles/immich, which appends to the
+    # live postgresql.auto.conf via ALTER SYSTEM - the supported way to change
+    # settings without replacing the server's startup configuration.
     # See infra/postgres/tuning.conf for the reasoning behind each value.
-    command: >-
-      postgres
-      -c shared_buffers=3GB
-      -c effective_cache_size=8GB
-      -c work_mem=32MB
-      -c maintenance_work_mem=512MB
-      -c max_wal_size=2GB
-      -c min_wal_size=512MB
-      -c wal_compression=on
-      -c checkpoint_completion_target=0.9
-      -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c max_worker_processes=4
-      -c max_parallel_workers=2
-      -c max_parallel_workers_per_gather=1
-      -c max_parallel_maintenance_workers=1
-      -c max_connections=50
-      -c autovacuum_max_workers=2
-      -c autovacuum_naptime=30s
-      -c log_min_duration_statement=2000
 
 volumes:
   model-cache:
