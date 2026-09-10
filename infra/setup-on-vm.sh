@@ -197,13 +197,26 @@ METRICS_INGEST_URL=https://vault-amber-five.vercel.app/api/metrics/ingest
 
 # --- Immich read-only API key (server.statistics, server.storage, server.about) ---
 IMMICH_API_KEY=
-IMMICH_BASE_URL=http://127.0.0.1:2283
+# NOT 127.0.0.1. docker-compose.yml binds Immich to the Tailscale address only
+# (`${TAILSCALE_IP}:2283:2283`), so nothing listens on loopback - a loopback URL
+# here makes every collector run report "immich api unreachable or key
+# rejected". Filled in automatically below with this host's Tailscale IP.
+IMMICH_BASE_URL=http://TAILSCALE_IP_PLACEHOLDER:2283
 
 # --- Paths ---
 UPLOAD_LOCATION=/mnt/media
 STATE_DIR=/var/lib/personal-vault
 ENVEOF
-  ok "created /etc/personal-vault/ops.env (needs filling in)"
+  # The tailnet is up by this point (the playbook joined it), so resolve the
+  # placeholder to this host's actual address.
+  ts_now="$(tailscale ip -4 2>/dev/null | head -1 || true)"
+  if [[ -n "$ts_now" ]]; then
+    sudo sed -i "s|TAILSCALE_IP_PLACEHOLDER|${ts_now}|" /etc/personal-vault/ops.env
+    ok "created /etc/personal-vault/ops.env (IMMICH_BASE_URL set to ${ts_now})"
+  else
+    warn "could not read the Tailscale IP - set IMMICH_BASE_URL in ops.env by hand"
+    ok "created /etc/personal-vault/ops.env (needs filling in)"
+  fi
 else
   ok "ops.env already exists, left untouched"
 fi
