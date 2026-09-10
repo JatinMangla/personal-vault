@@ -186,6 +186,9 @@ GOZUNGA_KEY=
 GOZUNGA_SECRET=
 
 # --- healthchecks.io dead-man switches ---
+# The UUID ONLY - not the full ping URL. The scripts prepend
+# https://hc-ping.com/ themselves, so pasting the whole URL gives HTTP 400.
+# Format: 8-4-4-4-12 hex, e.g. f1de7580-1448-4f9b-92b7-cba2b76bd4de
 HEALTHCHECK_UUID=
 HEALTHCHECK_METRICS_UUID=
 
