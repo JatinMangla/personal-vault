@@ -28,9 +28,14 @@ TimeoutStartSec=6h
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# ProtectHome=read-only, NOT true. `true` makes /root invisible to the service,
+# and restic's password lives at /root/.restic-pass - so the job failed with
+# "Fatal: /root/.restic-pass does not exist" even though the file was present
+# and readable to root outside the unit. read-only still blocks writes to /root
+# while letting restic read the one file it cannot run without.
+ProtectHome=read-only
 ReadWritePaths=/var/lib/personal-vault /tmp
-ReadOnlyPaths=/mnt/media
+ReadOnlyPaths=/mnt/media /root/.restic-pass
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
