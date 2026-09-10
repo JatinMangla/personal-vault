@@ -61,8 +61,9 @@ fi
 bold "2/7  Fetching the repository"
 
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl jq >/dev/null
-ok "git, curl, jq installed"
+# rsync is NOT present on Ubuntu Minimal images and step 6 depends on it.
+sudo apt-get install -y -qq git curl jq rsync >/dev/null
+ok "git, curl, jq, rsync installed"
 
 if [[ -d "$REPO_DIR/.git" ]]; then
   git -C "$REPO_DIR" pull --ff-only || warn "could not fast-forward; using existing checkout"

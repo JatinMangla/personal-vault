@@ -126,6 +126,27 @@
     state: enabled
     logging: 'low'
 
+# --- rpcbind --------------------------------------------------------------
+
+# rpcbind gets pulled in as a dependency of the iSCSI tooling needed to attach
+# the Oracle block volume, and it listens on 0.0.0.0:111 by default. Nothing
+# here uses RPC - the volume attaches over iSCSI directly - so it is pure
+# exposed surface. Historically rpcbind has been an amplification-attack vector.
+#
+# The post-task check at the end of the playbook is what surfaced this on a real
+# deployment; ufw would block it from outside, but not listening at all is
+# better than relying on one control.
+- name: Disable rpcbind if present
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - rpcbind.service
+    - rpcbind.socket
+  failed_when: false
+
 # --- fail2ban -------------------------------------------------------------
 
 - name: Configure fail2ban for sshd
