@@ -32,10 +32,23 @@
       LoginGraceTime 30
       ClientAliveInterval 300
       ClientAliveCountMax 2
-      # Modern algorithms only.
-      KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org
-      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com
-      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+      #
+      # DELIBERATELY NOT RESTRICTING KexAlgorithms / Ciphers / MACs.
+      #
+      # An earlier version pinned these to a narrow modern set. The result was a
+      # real lockout: the client and server could not agree on an algorithm and
+      # every connection died with "kex_exchange_identification: read:
+      # Connection reset" - before authentication, so no useful error either end.
+      #
+      # The `validate:` guard below does not catch this. `sshd -t` only checks
+      # that the file parses; it cannot know whether a real client will still be
+      # able to negotiate.
+      #
+      # Ubuntu 24.04 ships OpenSSH 9.6, whose defaults already exclude every
+      # broken algorithm - no SHA-1 kex, no CBC ciphers, no truncated MACs.
+      # Narrowing further buys almost nothing here and risks locking out the
+      # only administrative path to the machine. Key-only auth, fail2ban and a
+      # default-deny firewall are what actually secure this box.
     # Refuse to install a config that sshd itself rejects. Without this, a typo
     # here locks everyone out of the box permanently.
     validate: /usr/sbin/sshd -t -f %s
@@ -46,6 +59,27 @@
     name: ssh
     enabled: true
     state: started
+
+- name: Verify sshd still accepts a connection after hardening
+  # `sshd -t` (the validate: above) only proves the file PARSES. It cannot tell
+  # you whether a client can still negotiate a connection - which is how a bad
+  # KexAlgorithms line once locked this machine out entirely, with the failure
+  # appearing only on the next login attempt.
+  #
+  # This actually opens a TCP connection and reads the version banner. If sshd
+  # is refusing connections, the play fails HERE, while the operator still has a
+  # working session, instead of after they disconnect.
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 22
+    state: started
+    timeout: 15
+    search_regex: SSH-2.0
+  register: sshd_reachable
+
+- name: Report sshd health
+  ansible.builtin.debug:
+    msg: "sshd is accepting connections and advertising {{ sshd_reachable.match_groups | default(['SSH-2.0']) | first }}"
 
 # --- Firewall -------------------------------------------------------------
 
