@@ -163,9 +163,29 @@ fit and live on a single disk. Stated the same way in `README.md`.
 
 | Gate | Blocked on |
 |---|---|
-| **P3 restore drill** | **Photos.** DB path passed 2026-09-10; media path needs a non-empty library. |
-| P2 face recognition / semantic search | Photos being uploaded (library is empty) |
+| **P3 restore drill** | **Photos in Immich.** DB path passed 2026-09-10; media path needs a non-empty `/mnt/media`. |
+| P2 face recognition / semantic search | Photos in Immich (library is empty) |
 | P8 free-tier ledger at $0.00 | A month of live billing to confirm against |
+
+### Component D fully verified (2026-09-11)
+
+`metrics-collector` confirmed **green** on healthchecks.io. That closes the last
+unverified link in the push-metrics chain:
+
+VM collects → HMAC-SHA256 signs → Vercel verifies (constant-time, 5-min replay
+window) → service role writes to Supabase → `/status` renders → dead-man's
+switch watches the whole thing.
+
+### Document vault exercised with real use (2026-09-11)
+
+~20 files uploaded, downloaded and deleted successfully. This covers the presign
+path in both directions plus the delete ordering (metadata row first, then the
+blob, so a failure leaves an orphan rather than a dangling row).
+
+**Note for anyone reading the P3 row above:** these files went to the *document
+vault* (Supabase Storage), not to Immich. The two are separate systems. The
+restic job backs up `/mnt/media` on the Oracle VM, which these files never
+touch — so this use does not advance the restore-drill gate.
 
 P1 (`nmap` zero open ports) and P7 (metrics every 15 min) are **done** — see the
 Part 2 section above.

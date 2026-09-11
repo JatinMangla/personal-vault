@@ -153,7 +153,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
 | P5 | Presign API + auth | **Live and in use** - real file round-tripped, RLS verified |
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 140/140, PWA installable |
-| P7 | Collector + `/status` dashboard | **Done** — live metrics arriving every 15 min |
+| P7 | Collector + `/status` dashboard | **Done** — live metrics every 15 min, healthcheck green |
 | P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
 
 All four components are deployed and running. The remaining gate is **P3**: the
