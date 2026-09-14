@@ -120,6 +120,57 @@ so in the result string rather than writing a bare `PASS`.
 
 ---
 
+## Draining the card with `tg-archive`
+
+```bash
+tg-archive status     # done / remaining / staged / running
+tg-archive start      # drain until the card is done, or paused
+tg-archive pause      # stop after the current batch finishes
+tg-archive resume     # clear the pause flag
+```
+
+`start` keeps calling `tg-upload.sh` while staging refills, and exits after two
+consecutive empty passes (`IDLE_WAIT_SECONDS`, default 300, between them).
+Nothing is deleted from the card by any of this — the uploader prints
+`SAFE TO CLEAR THIS BATCH FROM THE CARD` once a batch has round-tripped.
+
+**Pause is checked between batches, never mid-file.** Killing an upload midway
+would leave a partial object in the channel and a file in staging that Check #2
+never confirmed. Waiting for the current batch means every pause point is a
+consistent state.
+
+**A failed batch does not stop the loop.** `tg-upload.sh` never deletes what it
+could not verify, so retrying is safe. If a batch keeps failing, run
+`tg-upload.sh` by hand to see the full output.
+
+### State files, under `WORK_DIR`
+
+| File | Meaning |
+|---|---|
+| `uploaded.sha256` | Every file verified by Check #2. This is what `status` counts. |
+| `.paused` | Present means paused. `resume` deletes it. |
+| `.loop.lock` | Held while a loop runs. The file persists; only the lock matters. |
+
+`uploaded.sha256` exists because `tg-upload.sh` clears staging on success and
+keeps no history of its own — without it nothing on the VM knows how far
+through the card you are.
+
+### Installing it
+
+```bash
+sudo rsync -a ~/personal-vault/ops/insta360-bin/ /opt/insta360-archive/bin/
+sudo chmod +x /opt/insta360-archive/bin/*.sh
+sudo ln -sf /opt/insta360-archive/bin/tg-archive.sh /usr/local/bin/tg-archive
+
+# Optional: run it as a service instead of in a terminal.
+sudo cp ~/personal-vault/ops/systemd/tg-archive.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start tg-archive      # journalctl -fu tg-archive to watch
+```
+
+The `chmod` is not optional — `rsync -a` has dropped the executable bit here
+before, giving `203/EXEC`.
+
 ## Routine checks
 
 ```bash

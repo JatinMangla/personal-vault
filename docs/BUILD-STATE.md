@@ -168,17 +168,32 @@ A 185 MB file went card → phone → VM → Telegram → downloaded back →
 hash-verified → staging cleared, at 11:53 UTC. Measured throughput and the
 operational notes are in `docs/RUNBOOK.md`.
 
-Status: **works, entirely by hand.** Automating it is the next body of work.
+Status: **automated as of 2026-09-14.** `tg-archive` drains the card unattended.
+
+| Was blocked on | Resolution |
+|---|---|
+| Scripts into version control | **Closed** — `e9fe0a5`. They had existed on one VM, in no repo. |
+| Syncthing selective sync | **Moot.** The manifest is generated on the phone before any file moves, and the pipeline begins at `STAGING_DIR`. The phone already gates what moves; no API key was ever needed. |
+| Drain loop (`tg-archive`) | **Written** — `770cd21`. Loop, pause/resume, status. |
+
+### Still open
 
 | Gate | Blocked on |
 |---|---|
-| **`restore.sh` has never run** | Nothing — testable on any Python machine. Procedure in `docs/RUNBOOK.md`. |
-| Drain loop (`tg-archive`) | Two gates below, both needing the VM |
-| Scripts into version control | They exist on **one machine only**, backed up nowhere |
-| Syncthing selective sync | Needs a live API call; Tailscale-only, decides the loop's design |
+| **`restore.sh` has never run** | Nothing. Testable on any machine with Python; procedure in `docs/RUNBOOK.md`. |
+| Check #2 re-downloads the whole channel | Works, but unbounded: ~20 GB at batch 1, ~400 GB by batch 10. Fix is to verify by message id recorded at upload time. |
 
 `restore.sh` is the Telegram archive's equivalent of the restore drill, and it
 fails the same standard: an archive nobody has restored from is a hypothesis.
+
+### A bug worth remembering
+
+`tg-upload.sh` line 28 read `>/dev/null  true` instead of `>/dev/null || true` —
+a fourth casualty of the paste corruption that ate three others. `bash -n`
+cannot catch it: the line is valid shell that passes `true` to `curl` as a
+second URL. Under `set -e` a failed healthcheck ping would then abort the
+upload run, so the dead-man's switch could take down the job it watches.
+Found by reading, not by tooling. Fixed in `e9fe0a5`.
 
 ## Not yet verified — requires live infrastructure
 
