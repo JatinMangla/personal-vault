@@ -57,6 +57,42 @@ curl -s -H "X-API-Key: $K" http://127.0.0.1:8384/rest/system/version
 was recreated to point at `tg-batch` instead of the whole `dcim` directory. Any
 document still referencing it is stale.
 
+### Ignore patterns cannot stop the transfer from the VM side
+
+Verified 2026-09-15. The endpoint works:
+
+```bash
+curl -s -H "X-API-Key: $K" "http://127.0.0.1:8384/rest/db/ignores?folder=dub20-7j8sw"
+# {"error":null,"expanded":null,"ignore":null}
+```
+
+**But setting it here saves nothing.** The VM's folder is `receiveonly`, so a
+`.stignore` on the VM makes the VM *discard* what the phone sent — the bytes
+have already crossed the OTG cable at ~1.3 MB/s and the battery is already
+spent. The cost being optimised away is the cost already paid.
+
+Only an ignore list on the **phone's** folder prevents transmission, and the
+Android app keeps its config in private storage:
+
+```bash
+find /data/data/com.nutomic.syncthingandroid \
+     /sdcard/Android/data/com.nutomic.syncthingandroid -name config.xml
+# returns nothing - unreadable from Termux
+```
+
+So phone-side patterns must be typed into the app's folder settings by hand.
+
+**The simpler answer is to delete the files from `tg-batch`.** It holds copies,
+never originals, and `tg-upload.sh` prints `SAFE TO CLEAR THIS BATCH FROM THE
+CARD` at exactly the moment it is safe. Fewer taps than maintaining a growing
+ignore list, and no filename-only failure mode — `.stignore` matches names, so
+a reused filename carrying new footage would be silently skipped forever.
+
+Note the phone runs its own Syncthing on 8384 too: a `curl` from Termux to
+`127.0.0.1:8384` returns a redirect to the Android app's web UI. That is the
+phone's API, not the VM's — running the VM's command in Termux hits the wrong
+machine and the config path does not exist there.
+
 ### The web UI is effectively unreachable from the phone
 
 Syncthing binds to localhost. Tunnelling to it (`ssh -L 8384:127.0.0.1:8384`)
