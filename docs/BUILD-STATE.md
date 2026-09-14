@@ -180,7 +180,7 @@ Status: **automated as of 2026-09-14.** `tg-archive` drains the card unattended.
 
 | Gate | Blocked on |
 |---|---|
-| **`restore.sh` has never run** | Nothing. Testable on any machine with Python; procedure in `docs/RUNBOOK.md`. |
+| **`restore.sh` has never run for real** | Nothing — it exists now (written 2026-09-14) and passes 8 fixture tests, but has never been pointed at the actual Telegram channel. Until it has, the recovery half is tested only against stubs. Usage in `docs/RUNBOOK.md`. |
 | Check #2 re-downloads the whole channel | Works, but unbounded: ~20 GB at batch 1, ~400 GB by batch 10. Fix is to verify by message id recorded at upload time. |
 
 `restore.sh` is the Telegram archive's equivalent of the restore drill, and it

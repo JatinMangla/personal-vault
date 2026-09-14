@@ -86,37 +86,91 @@ Keep both if the systemd unit is ever rewritten:
 
 ---
 
-## Testing `restore.sh` — do this before trusting the archive
+## Restoring from the archive
 
-**`restore.sh` has never been run.** It is the half that matters in a year: the
-script that turns Telegram messages back into editable `.insv` files.
+`restore.sh` pulls `.insv` files back out of the channel. Written 2026-09-14;
+**it has still never been run against the real archive.** Until it has, the
+recovery half of this system is tested only against fixtures.
 
-This project already holds its photo backups to the standard that *a backup
-that has never been restored is a hypothesis* (see `ops/RESTORE-LOG.md`). The
-Telegram archive is under exactly the same rule, and currently fails it.
+```bash
+restore.sh --list                                  # what is in the channel
+restore.sh --into ~/recovered --dry-run            # what would come back
+restore.sh --into ~/recovered --manifest ~/card.sha256
+restore.sh --into ~/recovered VID_001.insv         # just one file
+```
 
-Test it on any machine with Python. Do not wait for the Mac.
+**It runs on any machine with Python** — that is the point, because a real
+restore happens when the VM is gone. It needs `telegram-download`, the
+`telegram-upload` config JSON, and the channel id via `--channel` or
+`TG_CHANNEL`. It does not need the VM's env file, `/mnt/media`, Syncthing,
+Immich or systemd.
 
-1. **Pick a file whose hash you already have** — one archived during a real
-   run, with its fingerprint recorded in the manifest at upload time. A restore
-   you cannot check against a known value proves nothing.
-2. **Fresh virtualenv**, on any machine with Python and network access.
-   Install only what `restore.sh` declares it needs.
-3. **Run it against that single message id**, writing into an empty scratch
-   directory.
-4. **Hash the output and compare.** `sha256sum` the restored file against the
-   manifest value. **This is the assertion** — everything else is setup.
-5. **Confirm it is a real `.insv`**: the size matches, and it opens in a player
-   or in Insta360 Studio.
-6. **Record the result with a date**, in the format `ops/RESTORE-LOG.md` uses.
+It will never delete anything, never overwrite an existing file, and never
+report success for a file it could not verify.
 
-### Use a distinct result string for a partial test
+### Reading the result line
 
-`ops/RESTORE-LOG.md` records `PASS (DB-ONLY)` when only the database half of a
-restore was exercised, precisely so a partial drill can never later be mistaken
-for a full one. Borrow that convention here. If you verify a small file but not
-a multi-gigabyte one, or verify the download but not that the file opens, say
-so in the result string rather than writing a bare `PASS`.
+| Result | Meaning |
+|---|---|
+| `PASS` | Every restored file matched the manifest byte for byte. |
+| `RESTORED (UNVERIFIED)` | Files came back, but some or all were not checked against a manifest. Not a pass. |
+| `NOTHING DONE` | Everything was skipped because it already existed. Nothing was verified. **Not a pass.** |
+| `FAIL` | A restored file did not match its manifest hash. The file is left in place for inspection. |
+
+The distinctions are deliberate, and follow `ops/RESTORE-LOG.md`'s
+`PASS (DB-ONLY)` convention: a partial result must never be mistakable for a
+full one. Three bugs in exactly this accounting were caught by testing —
+including a run that printed `PASS` having verified precisely zero files.
+
+### Recovering the manifest itself
+
+Verification needs the manifest, which is generated on the phone. `tg-upload.sh`
+uploads a copy after each batch as `manifest-<timestamp>.sha256`, so it is
+usually recoverable from the archive:
+
+```bash
+restore.sh --list                                        # find the newest one
+restore.sh --into ~/recovered manifest-20260914T....sha256
+restore.sh --into ~/recovered --manifest ~/recovered/manifest-20260914T....sha256
+```
+
+Manifest copies are excluded from a bulk restore — no manifest lists itself, so
+they can never verify — but they restore normally when named explicitly.
+
+### Testing it for real — still outstanding
+
+This project holds its photo backups to the standard that *a backup that has
+never been restored is a hypothesis* (`ops/RESTORE-LOG.md`). The Telegram
+archive is under the same rule and currently fails it: `restore.sh` passes its
+fixture tests but has never been pointed at the real channel.
+
+Do this before deleting footage from anywhere else. Any machine with Python
+will do — do not wait for the Mac.
+
+```bash
+pipx install telegram-upload        # see the distutils warning at the top
+restore.sh --list                   # does the channel answer at all?
+restore.sh --into /tmp/drill --dry-run
+
+# The real test. Into an EMPTY directory, with a manifest.
+restore.sh --into /tmp/drill --manifest /path/to/card.sha256
+```
+
+**The result line is the assertion.** Only `PASS` means every restored file was
+byte-identical to what left the card; the script has already done the hashing.
+Restore into an empty directory — `NOTHING DONE` means everything was skipped
+and nothing was checked.
+
+Two things the script cannot tell you, so check them yourself:
+
+1. **Does the file actually open** in a player or Insta360 Studio? A correct
+   sha256 proves the bytes survived, not that the format is usable.
+2. **Does a multi-gigabyte file survive?** Split-part rejoining is exercised by
+   fixtures, but never yet on a real 12-part upload over a real connection.
+
+Then record the outcome with a date, the way `ops/RESTORE-LOG.md` does — and
+keep its convention of a distinct string for a partial result. If you verified
+a small file but not a large one, say so rather than writing a bare `PASS`.
 
 ---
 
