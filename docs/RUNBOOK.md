@@ -137,15 +137,18 @@ restore.sh --into ~/recovered --manifest ~/recovered/manifest-20260914T....sha25
 Manifest copies are excluded from a bulk restore — no manifest lists itself, so
 they can never verify — but they restore normally when named explicitly.
 
-### Testing it for real — still outstanding
+### Tested for real — `PASS` on 2026-09-14
 
-This project holds its photo backups to the standard that *a backup that has
-never been restored is a hypothesis* (`ops/RESTORE-LOG.md`). The Telegram
-archive is under the same rule and currently fails it: `restore.sh` passes its
-fixture tests but has never been pointed at the real channel.
+A real file was restored from the real channel and verified byte-identical to
+what left the card. Logged in `ops/ARCHIVE-RESTORE-LOG.md`.
 
-Do this before deleting footage from anywhere else. Any machine with Python
-will do — do not wait for the Mac.
+**Two things that run did not prove**, both still open: split-part rejoining
+against a genuine multi-gigabyte upload (the test file arrived whole, with no
+parts), and whether a restored file actually opens in Insta360 Studio. Re-run
+after the next batch containing a large file.
+
+Re-run the drill periodically, and after any change to `tg-upload.sh` or
+`restore.sh`. Any machine with Python will do — do not wait for the Mac.
 
 ```bash
 pipx install telegram-upload        # see the distutils warning at the top
