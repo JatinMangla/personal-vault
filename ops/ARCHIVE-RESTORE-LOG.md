@@ -36,10 +36,15 @@ been written to.
 **What this proves.** A file uploaded to Telegram can be downloaded back and is
 byte-identical to what left the card. The credentials work, the channel is
 readable, `telegram-download` retrieves the object, and the sha256 matches the
-manifest generated on the VM from what Syncthing delivered. (Termux cannot read
-the OTG card, so the manifest cannot be made phone-side — see
-`docs/HARD-WON.md`. Syncthing hashes every block it transfers, so the card→VM
-leg carries its own integrity check.)
+manifest generated on the VM from what Syncthing delivered. That proves the
+restored file matches the VM's copy; it does not by itself prove the VM's copy
+matched the card, because this run's manifest was built after the transfer.
+
+(An earlier note here claimed a card-side manifest was impossible because
+Termux cannot read the OTG card. That was wrong — `/storage/` is denied but
+`/storage/9C33-6BBD/` is readable, so future batches can be fingerprinted on
+the card for the stronger guarantee. See `docs/HARD-WON.md`. Syncthing also
+hashes every block it transfers, so the card→VM leg was never unprotected.)
 
 ### What it does NOT prove — read before trusting the archive
 

@@ -346,28 +346,56 @@ The bottleneck is the OTG read plus Syncthing hashing, **not** the internet.
 A 135GB batch would take ~30 hours of connected transfer, not the 2.4 hours line
 speed suggests. **Size batches at 10–20GB**, one charge each.
 
-### Termux cannot read the SD card
+### Termux CAN read the OTG card — name the volume explicitly
 
-`~/storage/external-0` and `external-1` are **both empty**. Android's scoped
-storage does not expose OTG devices to terminal apps, even after
-`termux-setup-storage`. `/storage/` itself is `Permission denied`.
+**This entry previously said the opposite, as settled fact. It was wrong, and
+the way it was wrong is the lesson.**
 
-Re-confirmed 2026-09-15 with the X4 physically connected and
-`termux-setup-storage` re-run: both symlinks still empty. **This is settled.
-Do not write phone-side scripts that touch the card** — a `tg-prune.sh` was
-written on that assumption and deleted the same day.
+What fails:
 
-**Consequence: the manifest cannot be generated on the phone.** It is generated
-on the VM from what arrives instead:
+```bash
+ls /storage/                 # Permission denied
+ls ~/storage/external-0/     # empty
+ls ~/storage/external-1/     # empty
+```
+
+What works, with the X4 connected:
+
+```bash
+ls /storage/9C33-6BBD/DCIM/tg-batch/    # lists the .insv files
+```
+
+**Android denies listing `/storage/` while still permitting access to a named
+subdirectory inside it.** "Permission denied" on the parent says nothing about
+the child. Three failures were generalised into a platform-wide impossibility
+without ever trying the one path that mattered, and a working `tg-prune.sh` was
+deleted on the strength of it.
+
+Two details that hid the answer:
+
+- The volume id is **UPPERCASE** (`9C33-6BBD`) and the directory is **`DCIM`**,
+  while the Syncthing config records the lowercase `9c33-6bbd/dcim`. That path
+  genuinely does not exist from Termux.
+- `find /storage ...` is useless for discovery, because the denial is on
+  listing the parent. Glob `/storage/XXXX-XXXX` directly instead.
+
+**Consequence: the manifest CAN be generated on the card**, which is the
+stronger guarantee — it proves the files match the card, not merely that the
+VM's copy matches itself:
+
+```bash
+cd /storage/9C33-6BBD/DCIM/tg-batch && sha256sum *.insv > ~/manifest-card.sha256
+```
+
+The VM-side alternative remains valid and is what the pipeline used up to
+2026-09-15:
 
 ```bash
 cd /mnt/media/tg-staging && sha256sum *.insv > /var/lib/insta360-archive/manifest.sha256
 ```
 
-Weaker in principle — it proves the VM copy matches itself, not the card. In
-practice Syncthing already hashes every block it transfers, so the card→VM leg
-has its own integrity check. The manifest's real job is the Telegram round trip,
-which is unaffected.
+Syncthing hashes every block it transfers, so the card→VM leg is not
+unprotected either way; the manifest's primary job is the Telegram round trip.
 
 ### Things that are impossible, confirmed by research
 

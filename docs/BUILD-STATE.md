@@ -173,7 +173,7 @@ Status: **automated as of 2026-09-14.** `tg-archive` drains the card unattended.
 | Was blocked on | Resolution |
 |---|---|
 | Scripts into version control | **Closed** — `e9fe0a5`. They had existed on one VM, in no repo. |
-| Syncthing selective sync | Open. The API key exists (`docs/HARD-WON.md`), but `.stignore` matches filenames only. Deleting from `tg-batch` by hand achieves the same thing without a silent-skip failure mode. |
+| Syncthing selective sync | **Closed a better way.** `.stignore` was the wrong tool — VM-side ignores cannot stop a transfer that has already happened, and it matches filenames only. `tg-prune.sh` runs in Termux against the card (readable as `/storage/9C33-6BBD/...`) and deletes archived files from `tg-batch` by hash, so Syncthing never sends them. |
 | Drain loop (`tg-archive`) | **Written** — `770cd21`. Loop, pause/resume, status. |
 
 ### Still open

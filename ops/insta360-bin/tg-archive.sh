@@ -159,7 +159,12 @@ cmd_status() {
   if (( total == 0 )); then
     echo
     echo "No manifest entries. MANIFEST=$MANIFEST"
-    echo "Generate it on the VM from what Syncthing delivered:"
+    echo "Generate it on the CARD, before anything moves (stronger - it"
+    echo "fingerprints the originals, not a copy of them):"
+    echo "  cd /storage/9C33-6BBD/DCIM/tg-batch && sha256sum *.insv > ~/manifest-card.sha256"
+    echo "then scp it to \$MANIFEST on this VM."
+    echo
+    echo "Or on the VM, from what Syncthing delivered:"
     echo "  cd $STAGING_DIR && sha256sum *.insv > $MANIFEST"
   fi
 }
