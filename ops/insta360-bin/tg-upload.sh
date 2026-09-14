@@ -133,6 +133,7 @@ upload_one "$manifest_copy" || err "manifest upload failed - not fatal"
 rm -f "$manifest_copy"
 
 log "Check #2 - downloading the channel back"
+
 rt_dir="$WORK_DIR/roundtrip.$$"
 mkdir -p "$rt_dir"
 cleanup() { [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"; }
