@@ -1,0 +1,52 @@
+[Unit]
+Description=Drain the Insta360 card into Telegram (tg-archive loop)
+Documentation=file:///opt/personal-vault/docs/RUNBOOK.md
+# Needs the media volume mounted: staging lives under /mnt/media, and without
+# this a failed volume attach would let the loop run against an empty directory
+# and conclude the card was already drained.
+RequiresMountsFor=/mnt/media
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/opt/insta360-archive/bin/tg-archive.sh start
+
+# The env file is root:ubuntu 0640, NOT 0600. The service runs as ubuntu and
+# could not read a root-only file - that was the first run's failure.
+EnvironmentFile=/etc/personal-vault/tg-archive.env
+
+# systemd's default PATH excludes ~/.local/bin, where pipx puts
+# telegram-upload and telegram-download. Without this the loop dies on
+# "telegram-upload missing" even though it runs fine in an interactive shell.
+Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# A full drain is ~250 GB at roughly 1.3 MB/s from the card, and the loop also
+# waits on Syncthing between batches. It is expected to run for days. Zero
+# disables the timeout entirely; use 'systemctl stop' or 'tg-archive pause'
+# to end it, not a timer.
+TimeoutStartSec=0
+
+# Deprioritised: a drain running for days must not make Immich unresponsive
+# on 2 ARM cores.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+# Hardening. The loop needs to read and delete within staging, write its state
+# directory, and reach the network. Nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/insta360-archive /mnt/media/tg-staging
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
