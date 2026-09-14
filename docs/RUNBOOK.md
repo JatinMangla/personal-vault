@@ -53,7 +53,13 @@ rather than just pointing Syncthing at the card.
 
 ```
 VM              ssh -i ~/.ssh/immich_phone ubuntu@100.88.183.74
-Syncthing API   see SYNCTHING_API_KEY in /etc/personal-vault/tg-archive.env
+                (that key is on the PHONE, not on the VM - from the VM itself
+                you are already logged in and need no key)
+Syncthing API   NOT in the env file. Verified 2026-09-14: tg-archive.env
+                contains no api/sync entry at all. The key lives only in
+                Syncthing's own config.xml - find it with:
+                  sudo find / -name config.xml -path '*syncthing*' 2>/dev/null
+                then read <apikey> from that file.
 Folder id       dub20-7j8sw          (was ik1hp-qdr83, deleted)
 Phone device    OJKKRMK-ZT2LZBV-E7PJ7WF-X4KQNPT-XKVYLXV-5IQY26R-6T3S5ZF-HAAHYAA
 Channel         -1004430700436 (insta-store-backup)
