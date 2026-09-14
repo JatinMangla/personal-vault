@@ -47,9 +47,15 @@ manifest generated on the phone before the file ever moved.
    Fixtures cover it (a 12-part rejoin, proving numeric rather than lexical
    order); the real channel has not.
 
-2. **Nobody has opened the restored file.** A matching sha256 proves the bytes
-   survived, not that Insta360 Studio will read it. Open `/tmp/drill/VID_*.insv`
-   in a player or in Studio before relying on this.
+2. **Nobody has opened the restored file — and nobody can yet.** A matching
+   sha256 proves the bytes survived, not that Insta360 Studio will read them.
+   **Blocked on hardware: there is no laptop or Mac.** This is not an oversight
+   to chase; it waits for a machine that can run Studio.
+
+   Partial check available meanwhile: copy a restored file to the phone and
+   open it in the Insta360 app. The app is more forgiving than Studio, so a
+   success there is evidence rather than proof — but a *failure* would be
+   conclusive and worth knowing immediately.
 
 3. **It ran on the VM, not on a recovery machine.** The realistic scenario is
    the VM being gone. `restore.sh` is written to need nothing from it — no env
@@ -58,3 +64,29 @@ manifest generated on the phone before the file ever moved.
 
 Re-run and append here after the next batch that contains a multi-gigabyte
 file, which is what closes point 1.
+
+---
+
+## 2026-09-14T18:10:19+00:00 — PASS
+
+Second restore, run on demand rather than as a drill, to confirm the recovery
+recipe works as a routine operation and not just once.
+
+- Restored: `VID_20250219_155539_00_032.insv` into `~/recovered`
+- Files written: 1 | Verified: 1 | Failed: 0
+- Elapsed: ~15 s
+
+The recipe, for when the card is long wiped:
+
+```bash
+source /etc/personal-vault/tg-archive.env
+mkdir -p ~/recovered
+/opt/insta360-archive/bin/restore.sh --into ~/recovered --manifest "$MANIFEST"
+```
+
+**Observed cost, and why it matters later.** Three invocations in a row
+(`--list`, `--dry-run`, then the restore) each downloaded the entire channel —
+the same 19 MB, three times. `telegram-download` cannot fetch metadata alone or
+filter by name. At two objects that is 15 seconds each; at 200 GB, `--list`
+alone becomes hours, and the archive gets painful to use at exactly the moment
+it is needed. Recording each file's message id at upload time is the fix.
