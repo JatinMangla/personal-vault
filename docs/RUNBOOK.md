@@ -200,6 +200,31 @@ consistent state.
 could not verify, so retrying is safe. If a batch keeps failing, run
 `tg-upload.sh` by hand to see the full output.
 
+### Save the transfer: prune on the phone first
+
+Run this in Termux **before connecting the card**:
+
+```bash
+tg-prune            # dry run - what is already archived
+tg-prune --apply    # remove those from tg-batch
+```
+
+It fetches the VM's ledger over Tailscale (a few KB), compares it against
+`tg-batch`, and deletes files already in the archive so Syncthing never sends
+them again. It prints how much transfer it saved.
+
+**This is where the real saving is.** The VM-side check below prevents a
+duplicate reaching Telegram, but by then the file has already crossed the cable
+at ~1.3 MB/s with the phone tethered and draining. Pruning first means those
+bytes never move at all. Hashing reads at ~3.7 GB/min — about 170x faster than
+sending the same data — so checking always costs less than transferring.
+
+It compares by name first and only hashes when a name matches, so a reused
+filename with new footage is kept, not mistaken for an upload that already
+happened. It only ever deletes from `tg-batch`, which holds copies; it refuses
+to run against any other directory, and `--apply` is required before anything
+is removed.
+
 ### Re-syncing the same file does not re-upload it
 
 Syncthing re-delivers whatever sits in the phone's `tg-batch` folder, so files
