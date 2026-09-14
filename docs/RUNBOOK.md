@@ -55,12 +55,20 @@ rather than just pointing Syncthing at the card.
 VM              ssh -i ~/.ssh/immich_phone ubuntu@100.88.183.74
                 (that key is on the PHONE, not on the VM - from the VM itself
                 you are already logged in and need no key)
-Syncthing API   NOT in the env file. Verified 2026-09-14: tg-archive.env
-                contains no api/sync entry at all. The key lives only in
-                Syncthing's own config.xml - find it with:
-                  sudo find / -name config.xml -path '*syncthing*' 2>/dev/null
-                then read <apikey> from that file.
-Folder id       dub20-7j8sw          (was ik1hp-qdr83, deleted)
+Syncthing API   NOT in tg-archive.env - that file holds seven TG_* variables
+                and nothing about Syncthing. The key lives in config.xml, at a
+                NON-DEFAULT path (newer Syncthing moved it out of ~/.config):
+                  /home/ubuntu/.local/state/syncthing/config.xml
+                Read it with (no sudo - the file is owned by ubuntu):
+                  grep -o '<apikey>[^<]*</apikey>' \
+                    ~/.local/state/syncthing/config.xml
+                Service: syncthing@ubuntu.service, listening on 127.0.0.1:8384.
+                A `CSRF Error` from the API means no valid key reached it -
+                the header was missing or malformed, not that the key is wrong.
+Folder id       dub20-7j8sw          (current). The earlier ik1hp-qdr83 was
+                deleted when the folder was recreated to point at tg-batch
+                specifically, rather than the whole dcim directory - which is
+                why only tg-batch syncs, and why files must be copied into it.
 Phone device    OJKKRMK-ZT2LZBV-E7PJ7WF-X4KQNPT-XKVYLXV-5IQY26R-6T3S5ZF-HAAHYAA
 Channel         -1004430700436 (insta-store-backup)
 Card path       /storage/9c33-6bbd/dcim/tg-batch
