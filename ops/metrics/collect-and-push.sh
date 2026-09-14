@@ -84,6 +84,10 @@ THUMBS_BYTES=$(dir_bytes "$MEDIA_DIR/thumbs")
 ENCODED_BYTES=$(dir_bytes "$MEDIA_DIR/encoded-video")
 PROFILE_BYTES=$(dir_bytes "$MEDIA_DIR/profile")
 BACKUPS_BYTES=$(dir_bytes "$MEDIA_DIR/backups")
+# Insta360 drain staging. Not an Immich directory: it holds one file in flight
+# between the camera card and Telegram. Without it on the dashboard, a transfer
+# in progress inflates the block-volume gauge with nothing to account for it.
+STAGING_BYTES=$(dir_bytes "$MEDIA_DIR/tg-staging")
 ORIGINALS_BYTES=$((UPLOAD_BYTES + LIBRARY_BYTES))
 
 # --- Immich statistics ----------------------------------------------------
@@ -206,6 +210,7 @@ read -r -d '' PAYLOAD <<JSON || true
     "thumbs_bytes": ${THUMBS_BYTES:-0},
     "encoded_video_bytes": ${ENCODED_BYTES:-0},
     "profile_bytes": ${PROFILE_BYTES:-0},
+    "staging_bytes": ${STAGING_BYTES:-0},
     "backups_bytes": ${BACKUPS_BYTES:-0}
   },
   "immich": {

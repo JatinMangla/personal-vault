@@ -1,6 +1,6 @@
 # Build state and next actions
 
-Last updated: **2026-09-11**
+Last updated: **2026-09-14**
 
 Everything buildable without cloud accounts is complete and verified. What
 remains requires provisioning, which needs your credentials.
@@ -158,6 +158,27 @@ fit and live on a single disk. Stated the same way in `README.md`.
    the state directory that is already writable.
 4. `restic` was never installed — Ubuntu Minimal ships without it, along with
    `rsync` and `nano`.
+
+## Insta360 archive pipeline — first run succeeded (2026-09-14)
+
+A separate pipeline from Immich: it moves ~250 GB of Insta360 footage off a
+camera card and into a Telegram channel, because that footage fits no free tier.
+
+A 185 MB file went card → phone → VM → Telegram → downloaded back →
+hash-verified → staging cleared, at 11:53 UTC. Measured throughput and the
+operational notes are in `docs/RUNBOOK.md`.
+
+Status: **works, entirely by hand.** Automating it is the next body of work.
+
+| Gate | Blocked on |
+|---|---|
+| **`restore.sh` has never run** | Nothing — testable on any Python machine. Procedure in `docs/RUNBOOK.md`. |
+| Drain loop (`tg-archive`) | Two gates below, both needing the VM |
+| Scripts into version control | They exist on **one machine only**, backed up nowhere |
+| Syncthing selective sync | Needs a live API call; Tailscale-only, decides the loop's design |
+
+`restore.sh` is the Telegram archive's equivalent of the restore drill, and it
+fails the same standard: an archive nobody has restored from is a hypothesis.
 
 ## Not yet verified — requires live infrastructure
 

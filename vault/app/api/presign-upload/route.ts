@@ -21,7 +21,9 @@ import {
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
-// Never cache a presigned URL: each one is single-purpose and expires in 60s.
+// Never cache a presigned URL: each one authorises writing to a single random
+// object key. Upload tokens last 2h, not 60s - Supabase fixes that and exposes
+// no override; the reasoning is in lib/storage.ts and SECURITY-NOTES.md.
 export const dynamic = 'force-dynamic';
 
 interface PresignUploadBody {

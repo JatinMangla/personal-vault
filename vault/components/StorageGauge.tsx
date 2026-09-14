@@ -91,7 +91,11 @@ export function StorageGauge({ used, total, state, label, segments }: StorageGau
           <div className="stack-bar">
             {segments.map((seg) => {
               const pct = total > 0 ? (seg.bytes / total) * 100 : 0;
-              if (pct <= 0) return null;
+              // Number.isFinite, not `pct > 0` alone: an optional payload field
+              // arrives as undefined on older samples, making pct NaN - and
+              // `NaN <= 0` is false, so a bare comparison lets it through and
+              // renders `--seg-width: NaN%`.
+              if (!Number.isFinite(pct) || pct <= 0) return null;
               return (
                 <div
                   key={seg.label}
@@ -108,17 +112,21 @@ export function StorageGauge({ used, total, state, label, segments }: StorageGau
             })}
           </div>
           <ul className="legend">
-            {segments.map((seg) => (
-              <li
-                key={seg.label}
-                className="row gap-05"
-                style={{ '--seg-color': seg.color } as CSSProperties}
-              >
-                <span className="dot" aria-hidden="true" />
-                <span className="muted truncate">{seg.label}</span>
-                <span className="ml-auto">{formatBytes(seg.bytes)}</span>
-              </li>
-            ))}
+            {/* Same filter as the bar above, so the two never disagree about
+                which segments exist. */}
+            {segments
+              .filter((seg) => Number.isFinite(seg.bytes) && seg.bytes > 0)
+              .map((seg) => (
+                <li
+                  key={seg.label}
+                  className="row gap-05"
+                  style={{ '--seg-color': seg.color } as CSSProperties}
+                >
+                  <span className="dot" aria-hidden="true" />
+                  <span className="muted truncate">{seg.label}</span>
+                  <span className="ml-auto">{formatBytes(seg.bytes)}</span>
+                </li>
+              ))}
           </ul>
         </div>
       )}

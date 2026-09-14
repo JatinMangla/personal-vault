@@ -188,6 +188,10 @@ export default function StatusPage() {
             { label: 'Thumbnails', bytes: payload.storage.thumbs_bytes, color: 'var(--green)' },
             { label: 'Encoded video', bytes: payload.storage.encoded_video_bytes, color: 'var(--amber)' },
             { label: 'DB backups', bytes: payload.storage.backups_bytes, color: 'var(--text-faint)' },
+            // ?? 0 because samples predating the drain loop have no such field.
+            // The gauge guards against NaN too, but coalescing here keeps the
+            // "undefined means nothing staged" decision at the call site.
+            { label: 'Staging', bytes: payload.storage.staging_bytes ?? 0, color: 'var(--accent-dim)' },
           ]}
         />
         {payload.immich.api_ok === false && (

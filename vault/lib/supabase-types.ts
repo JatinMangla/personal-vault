@@ -55,6 +55,12 @@ export interface MetricsPayload {
     encoded_video_bytes: number;
     profile_bytes: number;
     backups_bytes: number;
+    /**
+     * Insta360 drain staging, one file in flight. Optional: samples collected
+     * before the drain loop existed have no such field, and the dashboard must
+     * render those rows without it.
+     */
+    staging_bytes?: number;
   };
   immich: {
     photo_count: number;
