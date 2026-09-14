@@ -39,7 +39,44 @@ APPLY=0
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 err() { echo "[$(date +%H:%M:%S)] ERROR: $*" >&2; }
 
-[[ -d "$BATCH_DIR" ]] || { err "no such directory: $BATCH_DIR"; exit 1; }
+# Find tg-batch wherever the card mounted this time.
+#
+# Android gives a removable card a different mount point per session, so a
+# hardcoded path is wrong as often as it is right. Search for the folder
+# instead, and say plainly when the card simply is not plugged in - that is the
+# normal state between transfers, not a fault.
+if [[ ! -d "$BATCH_DIR" ]]; then
+  # `|| true` is load-bearing. find exits non-zero when a search root is
+  # missing or unreadable - /storage does not exist on every device, and in
+  # Termux it is full of permission-denied subdirectories - and under `set -e`
+  # a failing command substitution kills the script mid-assignment, before any
+  # of the guidance below can print. A guard that dies silently is worse than
+  # no guard. Search only roots that actually exist, and never let the search
+  # itself be fatal.
+  roots=()
+  [[ -d "$HOME/storage" ]] && roots+=("$HOME/storage")
+  [[ -d /storage ]] && roots+=(/storage)
+
+  found=""
+  if (( ${#roots[@]} )); then
+    found="$(find "${roots[@]}" -maxdepth 4 -iname 'tg-batch' -type d 2>/dev/null | head -1 || true)"
+  fi
+
+  if [[ -n "$found" ]]; then
+    log "found tg-batch at: $found"
+    BATCH_DIR="$found"
+  else
+    err "cannot find tg-batch anywhere"
+    err ""
+    err "If the X4 or the SD card is not plugged in, that is expected -"
+    err "tg-batch lives on the card. Connect it and run this again."
+    err ""
+    err "If it IS connected, find the folder and pass it directly:"
+    err "  ls /storage/"
+    err "  TG_BATCH_DIR=/storage/XXXX-XXXX/DCIM/tg-batch tg-prune"
+    exit 1
+  fi
+fi
 
 # Refuse to operate on something that is not a batch folder. Deleting from the
 # wrong directory on a phone is not recoverable.
