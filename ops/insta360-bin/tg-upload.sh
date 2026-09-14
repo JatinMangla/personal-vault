@@ -47,22 +47,80 @@ command -v telegram-download >/dev/null || { err "telegram-download missing"; ex
 
 mkdir -p "$WORK_DIR"
 
-exec 9>"$WORK_DIR/.session.lock"
-if ! flock -n 9; then
-  err "another run holds the session lock"
-  exit 1
+# Guard only when flock exists. `command -v` first, because a missing flock
+# makes `if ! flock -n 9` true and the run aborts claiming another upload is in
+# progress - a confusing lie that sends you hunting a process that was never
+# there. Ubuntu ships flock in util-linux so this holds on the VM; it is the
+# honest reporting that matters, and it lets the script be tested anywhere.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$WORK_DIR/.session.lock"
+  if ! flock -n 9; then
+    err "another run holds the session lock"
+    exit 1
+  fi
+else
+  err "flock unavailable - running without a session lock"
 fi
 
 shopt -s nullglob
-batch=("$STAGING_DIR"/*.insv)
+staged=("$STAGING_DIR"/*.insv)
 shopt -u nullglob
 
-if (( ${#batch[@]} == 0 )); then
+if (( ${#staged[@]} == 0 )); then
   log "staging is empty - nothing to do"
   hc ""
   exit 0
 fi
 
+# Drop anything already in the archive.
+#
+# Syncthing re-delivers whatever is in the phone's tg-batch folder, so a file
+# that was uploaded and verified last week arrives again the moment the card is
+# reconnected. Without this it would be archived a second time: a duplicate in
+# the channel, and the transfer paid for twice.
+#
+# Matched by HASH, not filename. The name is only a cheap first filter - the
+# hash is what uploaded.sha256 records, and it is what makes this self-healing.
+# A file reusing an old name with new content must still upload, and comparing
+# content is the only way to know the difference.
+#
+# A skipped file is REMOVED from staging. Leaving it would make the drain loop
+# see a permanently non-empty staging directory and spin forever on a file it
+# refuses to upload.
+UPLOADED_LOG="$WORK_DIR/uploaded.sha256"
+batch=()
+skipped=0
+
+for f in "${staged[@]}"; do
+  base="$(basename "$f")"
+
+  if [[ -r "$UPLOADED_LOG" ]] && grep -qF " $base" "$UPLOADED_LOG"; then
+    recorded="$(awk -v want="$base" '$2 == want { print $1; exit }' "$UPLOADED_LOG")"
+    actual="$(sha256sum "$f" | cut -d' ' -f1)"
+
+    if [[ -n "$recorded" && "$recorded" == "$actual" ]]; then
+      log "already archived, removing from staging: $base"
+      rm -f "$f"
+      skipped=$(( skipped + 1 ))
+      continue
+    fi
+
+    err "$base is recorded as archived but the content differs - uploading it"
+    err "  recorded $recorded"
+    err "  on disk  $actual"
+  fi
+
+  batch+=("$f")
+done
+
+if (( ${#batch[@]} == 0 )); then
+  log "all ${skipped} staged file(s) were already archived - nothing to upload"
+  log "SAFE TO CLEAR THIS BATCH FROM THE CARD"
+  hc ""
+  exit 0
+fi
+
+(( skipped )) && log "skipped $skipped file(s) already in the archive"
 log "batch of ${#batch[@]} file(s)"
 
 avail_kb="$(df -P "$STAGING_DIR" | awk 'NR==2{print $4}')"

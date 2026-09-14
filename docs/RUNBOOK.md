@@ -200,6 +200,29 @@ consistent state.
 could not verify, so retrying is safe. If a batch keeps failing, run
 `tg-upload.sh` by hand to see the full output.
 
+### Re-syncing the same file does not re-upload it
+
+Syncthing re-delivers whatever sits in the phone's `tg-batch` folder, so files
+already archived arrive again the moment the card is reconnected. `tg-upload.sh`
+drops them before uploading: if a staged file's **hash** is already in
+`uploaded.sha256`, it is deleted from staging and skipped.
+
+```
+already archived, removing from staging: VID_001.insv
+skipped 1 file(s) already in the archive
+```
+
+Matched by hash, not filename. A file reusing an old name with new content
+still uploads, and says so loudly:
+
+```
+ERROR: VID_001.insv is recorded as archived but the content differs - uploading it
+```
+
+So you can leave files in `tg-batch` and add new ones alongside them. Only the
+new ones cost bandwidth. Clearing the phone folder is a tidiness choice, not a
+requirement.
+
 ### State files, under `WORK_DIR`
 
 | File | Meaning |
