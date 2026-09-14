@@ -173,7 +173,7 @@ Status: **automated as of 2026-09-14.** `tg-archive` drains the card unattended.
 | Was blocked on | Resolution |
 |---|---|
 | Scripts into version control | **Closed** — `e9fe0a5`. They had existed on one VM, in no repo. |
-| Syncthing selective sync | **Moot.** The manifest is generated on the phone before any file moves, and the pipeline begins at `STAGING_DIR`. The phone already gates what moves; no API key was ever needed. |
+| Syncthing selective sync | Open. The API key exists (`docs/HARD-WON.md`), but `.stignore` matches filenames only. Deleting from `tg-batch` by hand achieves the same thing without a silent-skip failure mode. |
 | Drain loop (`tg-archive`) | **Written** — `770cd21`. Loop, pause/resume, status. |
 
 ### Still open

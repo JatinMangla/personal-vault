@@ -132,7 +132,19 @@ including a run that printed `PASS` having verified precisely zero files.
 
 ### Recovering the manifest itself
 
-Verification needs the manifest, which is generated on the phone. `tg-upload.sh`
+Verification needs the manifest, which is generated **on the VM** from what
+Syncthing delivered — Termux cannot read the OTG card, so it cannot be made on
+the phone (see `docs/HARD-WON.md`):
+
+```bash
+cd /mnt/media/tg-staging && sha256sum *.insv > /var/lib/insta360-archive/manifest.sha256
+```
+
+This proves the VM copy matches itself, not that it matches the card. Syncthing
+hashes every block it transfers, so the card→VM leg has its own integrity
+check; the manifest's real job is the Telegram round trip, which is unaffected.
+
+`tg-upload.sh`
 uploads a copy after each batch as `manifest-<timestamp>.sha256`, so it is
 usually recoverable from the archive:
 

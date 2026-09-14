@@ -4,7 +4,7 @@
 #
 # This is a WRAPPER. It does not upload anything itself: tg-upload.sh already
 # does the hard part (disk guard, flood-wait backoff, Check #1 against the
-# phone manifest, Check #2 round-trip, delete-only-after-verify). This adds the
+# manifest, Check #2 round-trip, delete-only-after-verify). This adds the
 # three things that were missing:
 #
 #   the outer loop   - keep draining until the card is done, not one batch
@@ -159,7 +159,8 @@ cmd_status() {
   if (( total == 0 )); then
     echo
     echo "No manifest entries. MANIFEST=$MANIFEST"
-    echo "The manifest is generated on the PHONE before any file moves."
+    echo "Generate it on the VM from what Syncthing delivered:"
+    echo "  cd $STAGING_DIR && sha256sum *.insv > $MANIFEST"
   fi
 }
 
