@@ -187,7 +187,7 @@ Status: **automated as of 2026-09-14.** `tg-archive` drains the card unattended.
 | **Archive restore: `PASS` 2026-09-14** | **Closed.** A real file was restored from the real channel and verified byte-identical to the card. Logged in `ops/ARCHIVE-RESTORE-LOG.md`. |
 | **Split-file rejoin: `PASS` 2026-09-15** | **Closed.** A 2.4 GB file split into 2 parts by telegram-upload came back, was rejoined in numeric order and hashed byte-identical. Every path in the pipeline has now run on real footage. |
 | Restored file opens in Insta360 Studio | **Blocked on hardware** — no laptop or Mac. Not chaseable; a matching SHA-256 proves the bytes survived, not that the format is readable. |
-| Check #2 re-downloads the whole channel | Works, but unbounded: ~20 GB at batch 1, ~400 GB by batch 10. Fix is to verify by message id recorded at upload time. |
+| Check #2 re-downloads the whole channel | **Fixed 2026-09-16.** Message ids are recorded at upload time (`--print-file-id`) as a fourth column in `uploaded.sha256`, and `tg-fetch-ids.py` fetches back only those messages. Cost is now batch-sized instead of archive-sized. The whole-channel path remains as a fallback for rows with no ids. **Awaiting its first real batch** — the drain running when it was written predates the change. |
 
 `restore.sh` is the Telegram archive's equivalent of the restore drill, and it
 fails the same standard: an archive nobody has restored from is a hypothesis.

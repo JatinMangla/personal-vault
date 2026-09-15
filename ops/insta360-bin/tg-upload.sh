@@ -209,18 +209,58 @@ log "Check #1 - verifying staged batch"
 write_phase hashing "" 0 "${#batch[@]}"
 "$HERE/verify-batch.sh" "$STAGING_DIR"
 
+# Message ids emitted by the most recent successful upload_one, one per line.
+#
+# A split file produces SEVERAL ids - one per part - so this is a list, not a
+# scalar. Check #2 fetches back exactly these, which is what makes verification
+# cost the size of the batch rather than the size of the whole archive.
+LAST_UPLOAD_IDS=""
+
+# Pull message ids out of telegram-upload's output.
+#
+# ANCHORED, not permissive. The first draft accepted any run of >= 5 digits
+# bounded by non-digits, and a fixture test immediately caught why that is
+# unsafe: `VID_20260210_061658_00_135.insv` yields "20260210", because an
+# underscore is a non-digit boundary. telegram-upload echoes filenames, so
+# Check #2 would then have fetched a message id harvested from a date - the
+# silently-WRONG id that is far worse than a missing one, since a missing id
+# only triggers the slow fallback while a wrong one fetches the wrong bytes.
+#
+# So an id must be either the entire line, or follow an explicit label on a
+# line that contains nothing else numeric. Anything embedded in a filename,
+# a size, a percentage or a progress counter is rejected. A format this does
+# not recognise yields nothing, which degrades to the full-channel download -
+# correct, just slower.
+extract_ids() {
+  printf '%s\n' "$1" | sed -E '
+    s/^[[:space:]]+//; s/[[:space:]]+$//
+    s/^([Ff]ile[[:space:]]+)?[Ii][Dd][[:space:]]*[:=][[:space:]]*//
+    s/^.*[[:space:]]file[[:space:]]+id[[:space:]]+//
+  ' | grep -xE '[0-9]{5,}' || true
+}
+
 upload_one() {
   local file="$1" attempt=0 max=8 out rc wait_s
+  LAST_UPLOAD_IDS=""
 
   while (( attempt < max )); do
     attempt=$((attempt + 1))
     set +e
-    out="$(telegram-upload --to "$TG_CHANNEL" --config "$TG_CONFIG" --large-files split --no-thumbnail "$file" 2>&1)"
+    out="$(telegram-upload --to "$TG_CHANNEL" --config "$TG_CONFIG" --large-files split --no-thumbnail --print-file-id "$file" 2>&1)"
     rc=$?
     set -e
 
     if (( rc == 0 )); then
       (( attempt > 1 )) && log "  succeeded on attempt $attempt"
+      LAST_UPLOAD_IDS="$(extract_ids "$out")"
+      if [[ -z "$LAST_UPLOAD_IDS" ]]; then
+        # Not fatal. Check #2 falls back to downloading the whole channel for
+        # any file without ids, exactly as it did before this change - slower,
+        # but the integrity guarantee is identical. A silent WRONG id would be
+        # far worse than a missing one.
+        err "  no message id captured for $(basename "$file")"
+        err "  Check #2 will fall back to a full-channel download for this batch"
+      fi
       return 0
     fi
 
@@ -245,12 +285,29 @@ upload_one() {
   return 1
 }
 
+# Message ids per file, collected as the batch uploads.
+#
+# Space-separated, keyed by basename. Bash 4 associative arrays are fine here -
+# the VM runs Ubuntu 24.04 - and this never outlives the process: it is written
+# to the ledger below, which is the durable record.
+declare -A BATCH_IDS=()
+ids_complete=1
+
 upload_index=0
 for f in "${batch[@]}"; do
   upload_index=$(( upload_index + 1 ))
   log "uploading $(basename "$f") ($(numfmt --to=iec "$(stat -c %s "$f")"))"
   write_phase uploading "$(basename "$f")" "$upload_index" "${#batch[@]}"
   upload_one "$f"
+
+  base="$(basename "$f")"
+  if [[ -n "$LAST_UPLOAD_IDS" ]]; then
+    # Flatten to one space-separated line; a split file contributes several.
+    BATCH_IDS["$base"]="$(printf '%s' "$LAST_UPLOAD_IDS" | tr '\n' ' ' | sed 's/ *$//')"
+    log "  message id(s): ${BATCH_IDS[$base]}"
+  else
+    ids_complete=0
+  fi
 done
 
 manifest_copy="$WORK_DIR/manifest-$(date -u +%Y%m%dT%H%M%SZ).sha256"
@@ -304,9 +361,56 @@ mkdir -p "$rt_dir"
 
 roundtrip_ok=1
 
-if ! ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ); then
-  err "could not download the channel back"
-  roundtrip_ok=0
+# Fetch back ONLY this batch's messages, when every file in it reported ids.
+#
+# This is the change that stops Check #2 growing without bound. Downloading the
+# whole channel cost the size of the ARCHIVE on every batch - ~20 GB at batch 1,
+# ~400 GB by batch 10 - and on 2026-09-15 it ran longer than the upload itself,
+# filled the boot volume once, and made an interrupted batch re-upload 18.8 GB
+# from scratch. Fetching by id costs the size of the BATCH, forever.
+#
+# The fallback is not a nicety. Files archived before ids were recorded have
+# none, and a build whose --print-file-id output this script failed to parse
+# would have none either. In both cases the old whole-channel path runs and the
+# guarantee is identical - slower, never weaker. Check #2 is the property that
+# makes this archive trustworthy, so it degrades rather than skips.
+FETCHER="$HERE/tg-fetch-ids.py"
+fetch_ids=""
+
+if (( ids_complete )) && [[ -x "$FETCHER" || -r "$FETCHER" ]]; then
+  for f in "${batch[@]}"; do
+    base="$(basename "$f")"
+    fetch_ids+=" ${BATCH_IDS[$base]:-}"
+  done
+fi
+
+# Run the fetcher with the interpreter that owns Telethon. telegram-upload is
+# installed by pipx into its own venv, so the system python3 usually cannot
+# import telethon at all - the failure is an ImportError at the wrong moment,
+# during verification, after the upload has already been paid for.
+PIPX_PY="${PIPX_PY:-$HOME/.local/share/pipx/venvs/telegram-upload/bin/python}"
+[[ -x "$PIPX_PY" ]] || PIPX_PY="$(command -v python3 || true)"
+
+if [[ -n "${fetch_ids// /}" ]]; then
+  # shellcheck disable=SC2086
+  log "Check #2 - fetching ${#batch[@]} file(s) by message id (not the whole channel)"
+  if ! ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+           --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
+           $fetch_ids >/dev/null ); then
+    err "fetch by message id failed - falling back to a full-channel download"
+    if ! ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ); then
+      err "could not download the channel back"
+      roundtrip_ok=0
+    fi
+  fi
+else
+  (( ids_complete )) || err "some files reported no message id - using a full-channel download"
+  [[ -r "$FETCHER" ]] || err "tg-fetch-ids.py not found beside this script - using a full-channel download"
+  log "Check #2 - downloading the whole channel back (slower; grows with the archive)"
+  if ! ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ); then
+    err "could not download the channel back"
+    roundtrip_ok=0
+  fi
 fi
 
 if (( roundtrip_ok )); then
@@ -381,8 +485,20 @@ for f in "${batch[@]}"; do
     # Rows written before 2026-09-15 have two columns and no size. Every reader
     # must treat a missing third field as unknown rather than zero, or the
     # total silently under-reports.
-    printf '%s %s %s\n' \
+    #
+    # FOURTH column, from 2026-09-16: the Telegram message id(s), space-
+    # separated because a split file occupies several messages. This is what
+    # lets a later Check #2 - or a future tool - fetch one file back without
+    # downloading the entire channel.
+    #
+    # APPENDED, never inserted. tg-archive.sh reads $2 and $3 positionally and
+    # tg-prune.sh matches on $1, so a trailing field is invisible to both;
+    # reordering would silently corrupt every one of them. Rows predating this
+    # have three fields and no ids, which readers must treat as "unknown", the
+    # same rule the size column already established.
+    printf '%s %s %s %s\n' \
       "$(sha256sum "$f" | cut -d' ' -f1)" "$base" "$(stat -c %s "$f")" \
+      "${BATCH_IDS[$base]:--}" \
       >> "$UPLOADED_LOG"
   fi
 done

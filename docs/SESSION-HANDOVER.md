@@ -229,7 +229,7 @@ VM fails, which caught the operator three times.
 
 | Item | Status |
 |---|---|
-| **Verify by message id** | Not started. The highest-value change left |
+| ~~Verify by message id~~ | **Done 2026-09-16.** `--print-file-id` → 4th ledger column → `tg-fetch-ids.py`. Check #2 is batch-sized, not archive-sized. **Not yet exercised on a real batch** — the drain running at the time predates it |
 | Restored file opens in Insta360 Studio | **Blocked on hardware** — no laptop/Mac. Not chaseable |
 | `.10`-before-`.2` part ordering | Fixture-only. Needs a ~22 GB file to surface; will not in practice |
 | P3 restore drill (Immich) | Still `PASS (DB-ONLY)` — needs photos in the library |

@@ -49,3 +49,7 @@ desktop.ini
 
 # ---- Local Claude overrides ----
 .claude/settings.local.json
+
+# Python bytecode, created by py_compile during syntax checks
+__pycache__/
+*.pyc

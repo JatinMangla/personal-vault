@@ -250,6 +250,16 @@ Written from memory in the first draft, all wrong, all caught by research:
 | `--files` (download) | **No such flag.** No filename filter, no glob, no message-id selector |
 | `--config` = session file | It is a **JSON config file**, not a session |
 
+### The one flag that DOES exist, and was checked
+
+| Flag | Status |
+|---|---|
+| `--print-file-id` (upload) | **Real.** Verified 2026-09-16 with `telegram-upload --help \| grep -i file-id` on the VM before a line of code was written. Output format is **not** documented — see the anchored-parser note above |
+
+The rule this table exists to enforce: **run `--help` on the VM before writing
+against a flag.** Four of the five flags ever assumed here were fictional, and
+the fifth was real but shaped differently than expected.
+
 ### Config shape
 
 No environment variables exist for credentials. Everything lives in JSON:
@@ -278,9 +288,47 @@ and every restore pulls the entire channel. Observed 2026-09-14: three
 invocations in a row each re-downloaded the same 19 MB. At 200 GB a single
 `--list` becomes an hours-long operation.
 
-**The fix for a future session:** `--print-file-id` on upload, recorded per
-file, then fetch back that single message with Telethon. That makes **one
-channel work forever** and removes the unbounded cost.
+**DONE 2026-09-16.** `--print-file-id` on upload, recorded as a fourth column in
+`uploaded.sha256`, then fetched back with `tg-fetch-ids.py` (Telethon). Check #2
+now costs the size of the **batch** rather than the size of the **archive**, and
+one channel works forever.
+
+The flag was **verified before any code was written** —
+`telegram-upload --help | grep -i file-id` on the VM — because the table below
+records four flags that were assumed from memory and did not exist. It is the
+one flag in this document confirmed against the installed build rather than
+inferred.
+
+Two properties that must survive any rewrite:
+
+- **The full-channel download is still there, as a fallback.** Files archived
+  before 2026-09-16 have no ids, and a build whose output the parser fails to
+  recognise yields none either. Both cases take the old slow path. Check #2 is
+  what makes this archive trustworthy, so it degrades rather than skips.
+- **The id column is APPENDED, never inserted.** `tg-archive.sh` reads `$2` and
+  `$3` positionally and `tg-prune.sh` matches on `$1`; a trailing field is
+  invisible to both, and reordering would silently corrupt all three readers.
+
+### The parser is anchored, and here is the bug that forced it
+
+`--print-file-id` exists but its output **format is undocumented**, so the first
+draft accepted any run of ≥5 digits bounded by non-digits. A fixture test caught
+what that does to a real filename:
+
+```
+VID_20260210_061658_00_135.insv   ->   20260210
+```
+
+An underscore is a non-digit boundary, and `telegram-upload` echoes filenames.
+Check #2 would have fetched a message id **harvested from a date** — the
+silently-wrong id, which is far worse than a missing one: a missing id only
+triggers the slow fallback, while a wrong one fetches the wrong bytes and could
+fail a verification that should have passed.
+
+An id must now be the **entire line**, or follow an explicit label. Fixtures
+live in `ops/insta360-bin/test-extract-ids.sh` and **must be kept in sync with
+`extract_ids()`** — if the two drift, the test passes while the parser is wrong,
+which is worse than no test.
 
 ### Do not use `-m join`
 
