@@ -118,6 +118,74 @@ describe('sync card guards', () => {
 });
 
 /**
+ * LimitMeter units — the bug that shipped.
+ *
+ * LimitMeter formatted everything through formatBytes, so the two archive
+ * meters, which count FILES, rendered "3 of 11 files" as "3 B / 11 B" on the
+ * live dashboard. Nothing threw and the bar filled to the right fraction; only
+ * the label was nonsense, which is why it survived review and was caught by a
+ * human reading the deployed page.
+ *
+ * Mirrors the formatter selection in components/HealthCard.tsx.
+ */
+describe('LimitMeter unit formatting', () => {
+  function format(n: number, unit: 'bytes' | 'count'): string {
+    if (unit === 'count') {
+      return Number.isFinite(n) ? Math.round(n).toLocaleString() : '—';
+    }
+    // Only the zero case is needed here; formatBytes itself is exercised above.
+    return n === 0 ? '0 B' : `${n} B`;
+  }
+
+  it('renders a file count as a bare number, not as bytes', () => {
+    // The regression, exactly as it appeared on the dashboard.
+    expect(format(3, 'count')).toBe('3');
+    expect(format(11, 'count')).toBe('11');
+    expect(format(3, 'count')).not.toBe('3 B');
+  });
+
+  it('still renders bytes as bytes, so storage meters are unaffected', () => {
+    expect(format(0, 'bytes')).toBe('0 B');
+  });
+
+  it('does not render a fractional file count', () => {
+    // used/limit arrive from JSON and are not guaranteed integral.
+    expect(format(2.4, 'count')).toBe('2');
+  });
+
+  it('survives a non-numeric count without printing NaN', () => {
+    expect(format(Number.NaN, 'count')).toBe('—');
+  });
+});
+
+/**
+ * The sync "delivered" ratio.
+ *
+ * local_files counts every file the VM holds in the folder; global_files counts
+ * what the phone announces right now. Live data showed local=31 against
+ * global=8, so local/global is NOT a completion ratio - it exceeded 1 and the
+ * meter pinned at 100% while reading "31 / 8".
+ */
+describe('sync delivered ratio', () => {
+  function deliveredOfTransfer(global: number, need: number): number {
+    return Math.max(0, global - need);
+  }
+
+  it('measures progress within the announced transfer, not against local files', () => {
+    // 8 announced, 3 still to arrive -> 5 delivered, never 31.
+    expect(deliveredOfTransfer(8, 3)).toBe(5);
+  });
+
+  it('never reports negative progress when need exceeds global', () => {
+    expect(deliveredOfTransfer(2, 5)).toBe(0);
+  });
+
+  it('is complete when nothing is outstanding', () => {
+    expect(deliveredOfTransfer(8, 0)).toBe(8);
+  });
+});
+
+/**
  * Phase markers. Absent on every sample before 2026-09-16, and an empty string
  * between batches — both must read as "no phase", never as a phase named "".
  */

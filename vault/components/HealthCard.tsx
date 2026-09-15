@@ -50,21 +50,36 @@ export function LimitMeter({
   limit,
   state,
   note,
+  unit = 'bytes',
 }: {
   label: string;
   used: number;
   limit: number;
   state: HealthState;
   note?: string;
+  /**
+   * What `used` and `limit` measure. Defaults to bytes, which is what every
+   * storage meter on the page wants.
+   *
+   * 'count' exists because the archive meters track FILES, and formatting a
+   * file count through formatBytes rendered "3 of 11 files" as "3 B / 11 B" on
+   * the live dashboard. A meter that silently mislabels its own units is worse
+   * than no meter: the shape looked right, so nothing flagged it until a human
+   * read the numbers.
+   */
+  unit?: 'bytes' | 'count';
 }) {
   const fraction = limit > 0 ? Math.min(1, used / limit) : 0;
+  const format = unit === 'count'
+    ? (n: number) => (Number.isFinite(n) ? Math.round(n).toLocaleString() : '—')
+    : formatBytes;
 
   return (
     <div className="mb-09">
       <div className="row-between mb-025">
         <span className="truncate">{label}</span>
         <span className={`faint flex-none state-${state}`}>
-          {formatBytes(used)} / {formatBytes(limit)}
+          {format(used)} / {format(limit)}
         </span>
       </div>
       <div

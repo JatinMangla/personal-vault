@@ -345,15 +345,28 @@ export default function StatusPage() {
               state="amber"
             />
           )}
-          {(payload.sync.global_files ?? 0) > 0 && (
+          {/* Only meaningful while a transfer is actually outstanding.
+              local_files counts everything the VM holds in the folder, which
+              includes files already drained and files from earlier batches;
+              global_files counts what the phone announces RIGHT NOW. So local
+              routinely EXCEEDS global - live data showed 31 against 8 - and a
+              "Delivered 31 / 8" meter pinned at 100% reads as broken rather
+              than as complete. When nothing is outstanding, say so in words. */}
+          {(payload.sync.need_files ?? 0) > 0 ? (
             <div className="mt-075">
               <LimitMeter
-                label="Delivered"
-                used={payload.sync.local_files ?? 0}
+                label="Delivered this transfer"
+                used={Math.max(
+                  0,
+                  (payload.sync.global_files ?? 0) - (payload.sync.need_files ?? 0),
+                )}
                 limit={payload.sync.global_files ?? 0}
-                state={(payload.sync.need_files ?? 0) > 0 ? 'amber' : 'green'}
+                state="amber"
+                unit="count"
               />
             </div>
+          ) : (
+            <StatRow label="Transfer" value="nothing outstanding" state="green" />
           )}
           {(payload.sync.need_bytes ?? 0) > 0 && (
             /* 12 MB/s is the midpoint of the 10-16 MB/s measured on a DIRECT
@@ -428,6 +441,7 @@ export default function StatusPage() {
               used={payload.archive.done}
               limit={payload.archive.total}
               state={payload.archive.remaining > 0 ? 'amber' : 'green'}
+              unit="count"
             />
           </div>
           {(payload.archive.bytes ?? 0) > 0 && (
