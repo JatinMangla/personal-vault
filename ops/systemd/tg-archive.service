@@ -42,10 +42,34 @@ Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbi
 TimeoutStartSec=0
 
 # Deprioritised: a drain running for days must not make Immich unresponsive
-# on 2 ARM cores.
+# on 2 ARM cores. Immich serves photo and video requests from the same disks
+# and the same two cores, so the archive always yields to it.
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6
+
+# Leave at least one core's worth of CPU for Immich, Postgres and the ML
+# container. 2 OCPUs = 200% total, so this caps the drain at three quarters of
+# one core - hashing 18 GB is CPU-bound and would otherwise compete directly
+# with thumbnail generation and transcoding.
+CPUQuota=75%
+CPUWeight=20
+
+# I/O weight well below the default 100. Immich reads originals and writes
+# thumbnails on the same volume the drain is verifying against.
+IOWeight=20
+
+# A runaway download must not trigger the OOM killer, which on a 12 GB box
+# would likely take Postgres with it rather than this.
+MemoryMax=1G
+MemorySwapMax=0
+
+# The boot volume is NOT writable for bulk data. /var/lib/insta360-archive
+# holds only the ledger and drain-state - a few KB - and the round trip is
+# guarded in tg-upload.sh to refuse the root filesystem outright. Immich, the
+# OS and Postgres share that 50 GB disk; on 2026-09-15 a verification pass took
+# it from 25% to 79% before being stopped. The ReadWritePaths below is the
+# whole of what this service may write.
 
 # Hardening. The loop needs to read and delete within staging, write its state
 # directory, and reach the network. Nothing else.

@@ -229,6 +229,26 @@ log "Check #2 - downloading the channel back"
 # recurse, so the uploader can never mistake a round-trip copy for a new file.
 ROUNDTRIP_BASE="${ROUNDTRIP_BASE:-$STAGING_DIR/.roundtrip}"
 mkdir -p "$ROUNDTRIP_BASE"
+
+# HARD GUARD: refuse to run if the round trip would land on the root
+# filesystem.
+#
+# Relocating the directory is a convention; this makes it a rule. If STAGING_DIR
+# or ROUNDTRIP_BASE is ever overridden badly, or /mnt/media fails to mount and
+# the path silently resolves under /, this stops the drain instead of filling
+# the 50 GB boot disk that Immich and the OS share. That is exactly what
+# happened on 2026-09-15, and a comment would not have prevented it.
+rt_fs="$(df -P "$ROUNDTRIP_BASE" | awk 'NR==2{print $6}')"
+root_fs="$(df -P / | awk 'NR==2{print $6}')"
+if [[ "$rt_fs" == "$root_fs" ]]; then
+  err "REFUSING: the round-trip directory is on the root filesystem"
+  err "  $ROUNDTRIP_BASE resolves to $rt_fs"
+  err "Check #2 downloads the WHOLE channel, so this would fill the boot"
+  err "volume and take Immich down with it. Is /mnt/media mounted?"
+  err "  findmnt /mnt/media"
+  exit 1
+fi
+
 rt_dir="$ROUNDTRIP_BASE/$$"
 mkdir -p "$rt_dir"
 cleanup() { [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"; }
