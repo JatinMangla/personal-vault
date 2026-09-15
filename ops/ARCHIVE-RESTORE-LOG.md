@@ -21,6 +21,27 @@ the other.
 
 ---
 
+## 2026-09-15T13:17:58+00:00 — PASS (split file, 2 parts)
+
+**The last untested path in the system.** Every previous batch was a single
+object under Telegram's 2000 MiB limit, so `telegram-upload`'s splitting and the
+numeric rejoin had only ever run against fixtures.
+
+- File: `VID_20260206_155947_00_126.insv`, 2.4 GB
+- Split into **2 parts** by telegram-upload
+- Upload: 3m18s | Check #2 round trip: 4m18s
+- `rejoined 2 part(s)` → `round trip verified` → staging cleared
+
+The rejoin is `sort -n -k1,1` on the numeric suffix, identical in
+`tg-upload.sh` and `restore.sh` so Check #2 and a later restore cannot
+disagree. At two parts numeric and lexical ordering coincide, so **this run did
+not stress the ordering itself** — the `.10`-before-`.2` hazard still has only
+fixture coverage. A file large enough to split into eleven parts (~22 GB) would
+close that, and is unlikely to occur in practice.
+
+What it did prove: splitting, reassembly and hash verification all work on real
+footage of a size that actually occurs.
+
 ## 2026-09-14T15:35:48+00:00 — PASS
 
 First restore from the real channel. Until this run, the archive had only ever
