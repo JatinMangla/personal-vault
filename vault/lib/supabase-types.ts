@@ -76,6 +76,14 @@ export interface MetricsPayload {
     remaining: number;
     /** Unix seconds when tg-archive last wrote its state. */
     updated: number;
+    /**
+     * Total bytes archived to Telegram, summed from the ledger's size column.
+     * Rows written before 2026-09-15 carry no size, so this UNDER-reports on an
+     * archive that predates it — `bytes_unknown` says how many such rows exist.
+     */
+    bytes?: number;
+    /** Archived files whose size was never recorded. 0 once the old rows age out. */
+    bytes_unknown?: number;
   };
   immich: {
     photo_count: number;

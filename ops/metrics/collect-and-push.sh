@@ -98,17 +98,21 @@ DRAIN_STATUS="idle"
 DRAIN_TOTAL=0
 DRAIN_DONE=0
 DRAIN_REMAINING=0
+DRAIN_BYTES=0
+DRAIN_BYTES_UNKNOWN=0
 DRAIN_UPDATED=0
 if [[ -r "$DRAIN_STATE" ]]; then
   # Read as key=value rather than sourcing it: this file is written by another
   # process, and sourcing would execute whatever it contains.
   while IFS='=' read -r k v; do
     case "$k" in
-      status)    DRAIN_STATUS="$v" ;;
-      total)     DRAIN_TOTAL="$v" ;;
-      done)      DRAIN_DONE="$v" ;;
-      remaining) DRAIN_REMAINING="$v" ;;
-      updated)   DRAIN_UPDATED="$v" ;;
+      status)        DRAIN_STATUS="$v" ;;
+      total)         DRAIN_TOTAL="$v" ;;
+      done)          DRAIN_DONE="$v" ;;
+      remaining)     DRAIN_REMAINING="$v" ;;
+      bytes)         DRAIN_BYTES="$v" ;;
+      bytes_unknown) DRAIN_BYTES_UNKNOWN="$v" ;;
+      updated)       DRAIN_UPDATED="$v" ;;
     esac
   done < "$DRAIN_STATE"
 fi
@@ -242,6 +246,8 @@ read -r -d '' PAYLOAD <<JSON || true
     "total": $(json_num "$DRAIN_TOTAL"),
     "done": $(json_num "$DRAIN_DONE"),
     "remaining": $(json_num "$DRAIN_REMAINING"),
+    "bytes": $(json_num "$DRAIN_BYTES"),
+    "bytes_unknown": $(json_num "$DRAIN_BYTES_UNKNOWN"),
     "updated": $(json_num "$DRAIN_UPDATED")
   },
   "immich": {

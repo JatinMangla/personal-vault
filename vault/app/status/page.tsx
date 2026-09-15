@@ -280,6 +280,29 @@ export default function StatusPage() {
               state={payload.archive.remaining > 0 ? 'amber' : 'green'}
             />
           </div>
+          {(payload.archive.bytes ?? 0) > 0 && (
+            <StatRow
+              label="Archived to Telegram"
+              value={
+                (payload.archive.bytes_unknown ?? 0) > 0
+                  ? `${formatBytes(payload.archive.bytes ?? 0)}+`
+                  : formatBytes(payload.archive.bytes ?? 0)
+              }
+            />
+          )}
+          {payload.archive.remaining > 0 && (payload.archive.bytes ?? 0) > 0 && payload.archive.done > 0 && (
+            /* Remaining transfer time, from the average size actually archived
+               rather than a guess. The card leg runs at ~1.3 MB/s over OTG,
+               which is the bottleneck - not the internet. */
+            <StatRow
+              label="Est. transfer left"
+              value={formatDuration(
+                (payload.archive.remaining *
+                  ((payload.archive.bytes ?? 0) / payload.archive.done)) /
+                  1_300_000,
+              )}
+            />
+          )}
           <StatRow
             label="Drain state"
             value={payload.archive.status}
@@ -290,6 +313,12 @@ export default function StatusPage() {
               label="Last progress"
               value={formatRelative(payload.archive.updated * 1000)}
             />
+          )}
+          {(payload.archive.bytes_unknown ?? 0) > 0 && (
+            <p className="faint">
+              {payload.archive.bytes_unknown} file(s) were archived before sizes
+              were recorded, so the total above is a lower bound.
+            </p>
           )}
           {payload.archive.status === 'incomplete' && (
             <p className="faint">

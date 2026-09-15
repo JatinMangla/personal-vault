@@ -354,12 +354,20 @@ metrics collector picks it up every 15 minutes and `/status` renders it, so a
 multi-day drain can be watched from a browser without SSH.
 
 ```
-status=running|complete|incomplete
-total=34        # files fingerprinted in the manifest
-done=21         # verified into Telegram
+status=idle|running|paused|complete|incomplete
+total=34              # files fingerprinted in the manifest
+done=21               # verified into Telegram
 remaining=13
+bytes=13421772800     # summed from the ledger's size column
+bytes_unknown=1       # archived rows with no recorded size
 updated=<unix timestamp>
 ```
+
+The dashboard card shows files done/remaining, a progress meter, total bytes
+archived, and an estimated transfer time for what is left — computed from the
+average size actually archived and the measured ~1.3 MB/s OTG rate, rather than
+a guess. `bytes_unknown` above zero means the byte total is a lower bound, and
+the card says so.
 
 `status` distinguishes finishing from giving up. A drain that stopped because
 Syncthing stalled or the cable was pulled looks identical from inside the loop —
@@ -372,7 +380,19 @@ The dashboard figure is up to 15 minutes old. For the live number, use
 
 | File | Meaning |
 |---|---|
-| `uploaded.sha256` | Every file verified by Check #2. This is what `status` counts. |
+| `uploaded.sha256` | Every file verified by Check #2. This is what `status` counts, and what both duplicate checks read. |
+
+`uploaded.sha256` has three space-separated columns:
+
+```
+<sha256>  <filename>  <bytes>
+```
+
+The size column was added 2026-09-15. Rows written before that have **two**
+columns and no size — every reader treats a missing third field as *unknown*
+rather than zero, so the archived-bytes total on `/status` is reported as a
+lower bound (`12.4 GB+`) while any such rows remain. Parse the filename as
+field 2 exactly, never as "everything after field 1".
 | `.paused` | Present means paused. `resume` deletes it. |
 | `.loop.lock` | Held while a loop runs. The file persists; only the lock matters. |
 

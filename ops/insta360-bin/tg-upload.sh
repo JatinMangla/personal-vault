@@ -265,7 +265,17 @@ log "Check #2 passed for all ${#batch[@]} file(s) - clearing staging"
 for f in "${batch[@]}"; do
   base="$(basename "$f")"
   if ! grep -qF " $base" "$UPLOADED_LOG" 2>/dev/null; then
-    printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$base" >> "$UPLOADED_LOG"
+    # Third column is the size in bytes. Recorded HERE because this is the last
+    # moment the file exists - staging is cleared two lines below, and nothing
+    # else on the VM keeps a copy. Without it, "how much have I archived" can
+    # only be answered by downloading the whole channel back.
+    #
+    # Rows written before 2026-09-15 have two columns and no size. Every reader
+    # must treat a missing third field as unknown rather than zero, or the
+    # total silently under-reports.
+    printf '%s %s %s\n' \
+      "$(sha256sum "$f" | cut -d' ' -f1)" "$base" "$(stat -c %s "$f")" \
+      >> "$UPLOADED_LOG"
   fi
 done
 log "recorded ${#batch[@]} file(s) in $(basename "$UPLOADED_LOG")"

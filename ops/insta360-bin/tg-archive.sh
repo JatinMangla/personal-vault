@@ -76,6 +76,9 @@ write_state() {
   remaining_n=$(( total_n - done_n ))
   (( remaining_n < 0 )) && remaining_n=0
 
+  local bytes_n unknown_n
+  read -r bytes_n unknown_n < <(uploaded_bytes)
+
   # Written atomically. The collector may read this at any moment, and a
   # half-written file would surface as a wrong number on the dashboard.
   {
@@ -83,6 +86,8 @@ write_state() {
     printf 'total=%s\n' "$total_n"
     printf 'done=%s\n' "$done_n"
     printf 'remaining=%s\n' "$remaining_n"
+    printf 'bytes=%s\n' "${bytes_n:-0}"
+    printf 'bytes_unknown=%s\n' "${unknown_n:-0}"
     printf 'updated=%s\n' "$(date +%s)"
   } > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
@@ -111,7 +116,23 @@ manifest_names() {
 
 uploaded_names() {
   [[ -r "$UPLOADED_LOG" ]] || return 0
-  cut -d' ' -f2- "$UPLOADED_LOG" 2>/dev/null | sed 's/^[[:space:]]*//'
+  # Field 2 exactly, not "everything after field 1". The ledger gained a size
+  # column on 2026-09-15, and `cut -f2-` would return "NAME SIZE" as the name.
+  awk 'NF >= 2 { print $2 }' "$UPLOADED_LOG" 2>/dev/null
+}
+
+# Bytes archived, and how many rows could not contribute.
+#
+# Rows written before the size column exists have two fields. Counting those as
+# zero would silently under-report the total, so they are counted separately
+# and the dashboard says how many are unknown rather than quietly guessing.
+uploaded_bytes() {
+  [[ -r "$UPLOADED_LOG" ]] || { echo "0 0"; return; }
+  awk '
+    NF >= 3 && $3 ~ /^[0-9]+$/ { sum += $3; next }
+    NF >= 2                    { unknown++ }
+    END { printf "%d %d\n", sum + 0, unknown + 0 }
+  ' "$UPLOADED_LOG" 2>/dev/null || echo "0 0"
 }
 
 # Record what a completed batch contained. tg-upload.sh deletes staging on
