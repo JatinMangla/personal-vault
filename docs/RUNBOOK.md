@@ -280,6 +280,30 @@ So you can leave files in `tg-batch` and add new ones alongside them. Only the
 new ones cost bandwidth. Clearing the phone folder is a tidiness choice, not a
 requirement.
 
+### ⚠️ Back up the ledger — it is the only record of what is archived
+
+```bash
+# in Termux, periodically
+scp -i ~/.ssh/immich_phone \
+  ubuntu@100.88.183.74:/var/lib/insta360-archive/work/uploaded.sha256 \
+  ~/ledger-backup.sha256
+```
+
+`uploaded.sha256` is the **sole source of truth** for what has already been
+archived. Both duplicate checks — `tg-prune` on the phone and `tg-upload.sh` on
+the VM — read it and nothing else. Telegram is never asked, because
+`telegram-download` cannot list a channel without downloading all of it.
+
+It lives at `/var/lib/insta360-archive/work/uploaded.sha256` on one VM, and
+nothing else backs it up.
+
+**Losing it costs bandwidth, not footage.** Everything staged would be
+re-uploaded: duplicates in the channel, and on a 250 GB archive, days of
+transfer at ~1.3 MB/s. The files themselves stay safe in Telegram.
+
+A wrong line is as bad as a missing file — a bad hash means that file
+re-uploads. Keep the backup somewhere that is neither the phone nor the VM.
+
 ### State files, under `WORK_DIR`
 
 | File | Meaning |
