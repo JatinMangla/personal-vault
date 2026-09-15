@@ -37,11 +37,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-            echo "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY repository secrets are not set."
-            echo "Add them in Settings > Secrets and variables > Actions."
-            echo "Without them retention does not run and metrics_samples grows"
-            echo "until it consumes the 500 MB Supabase free tier."
+          # Report WHICH secret is missing, and its length.
+          #
+          # The original guard named both together, so a run could not
+          # distinguish "neither is set" from "one has a typo in its name" -
+          # which sent a real session round the loop three times. Lengths only,
+          # never the values: a secret echoed into a public workflow log is
+          # leaked permanently, and GitHub's masking is not a reason to try.
+          missing=0
+
+          if [ -z "${SUPABASE_URL:-}" ]; then
+            echo "MISSING: SUPABASE_URL"
+            missing=1
+          else
+            echo "ok: SUPABASE_URL is set (${#SUPABASE_URL} chars)"
+          fi
+
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "MISSING: SUPABASE_SERVICE_ROLE_KEY"
+            missing=1
+          else
+            echo "ok: SUPABASE_SERVICE_ROLE_KEY is set (${#SUPABASE_SERVICE_ROLE_KEY} chars)"
+          fi
+
+          if [ "$missing" -eq 1 ]; then
+            echo
+            echo "Add the missing secret(s) at:"
+            echo "  Settings > Secrets and variables > Actions > New repository secret"
+            echo
+            echo "The name must match EXACTLY - capitals and underscores. A secret"
+            echo "added to an Environment, or as a Variable rather than a Secret,"
+            echo "does not reach this workflow and reads as absent here."
             exit 1
           fi
 
