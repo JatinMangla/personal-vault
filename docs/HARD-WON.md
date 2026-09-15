@@ -385,6 +385,45 @@ the filename, found the content did not match, and reported
 `same name, different content - keeping` rather than deleting a file it could
 not verify. Name-matching alone would have deleted an unarchived original.
 
+### Two bugs only a real install could find (2026-09-15)
+
+The first genuine batch through the finished pipeline — 694 MB, card to Telegram
+and verified back — surfaced two faults that every fixture had passed.
+
+**A symlinked command cannot find its siblings.** `tg-archive` installed as
+`/usr/local/bin/tg-archive` resolved its own directory with
+`dirname "${BASH_SOURCE[0]}"`, got `/usr/local/bin`, and looked there for
+`tg-upload.sh`. It failed with `not executable: /usr/local/bin/tg-upload.sh` —
+naming a path the operator never typed, for a file they never installed.
+
+```bash
+# wrong: resolves to the symlink's directory
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# right: follows the link to where the scripts actually live
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+```
+
+**This cannot be tested on the Windows machine.** Git Bash's `ln -s` creates a
+regular file, not a link, so `readlink -f` has nothing to follow and the test
+passes for the wrong reason. Confirmed working only on the VM.
+
+**Four ops scripts were committed `100644`.** `rsync -a` faithfully preserved
+the non-executable bit, and `collect-and-push.sh` failed with `command not
+found` on a file plainly present. Windows does not report the executable bit to
+git, so `chmod +x` locally never reaches the index:
+
+```bash
+git update-index --chmod=+x path/to/script.sh
+git ls-files -s ops/          # verify: 100755, not 100644
+```
+
+`ops/README.md` had long instructed a `chmod +x` after every rsync — a manual
+step that existed only to paper over this, and which hid it for months.
+
+**The lesson for both:** a fixture runs the script where it sits, with whatever
+permissions the working tree happens to have. Neither fault can appear until
+something is installed, symlinked and synced the way it really runs.
+
 ### Termux CAN read the OTG card — name the volume explicitly
 
 **This entry previously said the opposite, as settled fact. It was wrong, and
