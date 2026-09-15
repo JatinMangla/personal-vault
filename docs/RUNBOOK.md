@@ -209,28 +209,30 @@ a small file but not a large one, say so rather than writing a bare `PASS`.
 
 ---
 
-## The whole thing, in two commands
+## The whole routine: connect, move, walk away
 
-Once everything is installed, archiving a batch is:
+With `tg-archive.path` enabled (see below), archiving a batch takes **no
+commands at all**:
 
-**📱 Phone** — move footage into `tg-batch`, connect the X4, then:
+1. Connect the X4 to the phone
+2. Move footage into `tg-batch`
+3. Walk away
+
+`tg-archive.path` watches staging and starts the drain two minutes after the
+transfer goes quiet. It uploads, verifies each file by round-trip hash, clears
+staging, and updates `/status`. Watch progress there, or with
+`journalctl -fu tg-archive` on the VM.
+
+**Nothing to type at disconnect time either.** If you unplug mid-transfer,
+Syncthing resumes on reconnect and the drain picks up where it stopped.
+
+To force a run rather than wait for the timer:
 
 ```bash
-ssh immich tg-go
+ssh immich tg-go          # waits for the sync, then archives everything
 ```
 
-That one line waits for Syncthing to finish, fingerprints what arrived, uploads
-and verifies every file, and refreshes the dashboard. It runs for as long as the
-transfer takes and reports at each stage.
-
-**📱 Phone** — when it reports 0 remaining:
-
-```bash
-~/bin/tg-prune.sh --apply
-```
-
-That is the whole routine. Everything below is for when something needs
-inspecting.
+Everything below is for when something needs inspecting.
 
 ```bash
 tg-go            # wait for the sync, then archive everything
@@ -278,9 +280,19 @@ consistent state.
 could not verify, so retrying is safe. If a batch keeps failing, run
 `tg-upload.sh` by hand to see the full output.
 
-### Save the transfer: prune on the phone first
+### Optional: prune the card to save re-transfer
 
-Run this in Termux **before connecting the card**:
+**Not required.** `tg-upload.sh` rejects duplicates by hash regardless, so
+skipping this never double-archives anything and never loses a file. It costs
+only the card→VM transfer for footage already in Telegram — roughly **9 minutes
+and 3% battery per 700 MB file**, growing with however much accumulates.
+
+The cheapest fix is no command at all: **delete already-archived files from
+`tg-batch` when you next add footage**, while you are in the file manager
+anyway. Check `/status` shows `Remaining 0` first, and everything there is safe
+to remove.
+
+For the hash-checked version, run this in Termux with the card attached:
 
 ```bash
 tg-prune            # dry run - what is already archived
@@ -360,14 +372,22 @@ that went out, or the check fails.
 identical to what reached staging. That leg is Syncthing's, which hashes every
 block it transfers — solid, but not a checksum you control.
 
-In practice that gap is narrow, and `tg-prune --apply` deletes from `tg-batch`
-on the strength of it, because the alternative is worse: clearing the folder by
-hand means deciding without a hash, and deleting footage that was never
-uploaded is the unrecoverable mistake. The script deletes only what it has
-matched against `uploaded.sha256`, and keeps anything it cannot verify.
+In practice that gap is narrow — Syncthing verifies every block it sends, and
+the card copy is never modified by anything here.
 
-Use `--apply --keep` for a batch you would rather hold on the card until you
-have restored something from it and seen the file open.
+**It matters most when you clear `tg-batch` by hand.** Deleting by eye means
+deciding without a hash, and removing footage that was never archived is the
+one unrecoverable mistake in this system. So check `/status` reads
+`Remaining 0` first; everything in `tg-batch` is then provably in Telegram.
+
+`tg-prune --apply` is the same decision made with the hashes: it deletes only
+what it has matched against `uploaded.sha256` and keeps anything it cannot
+verify, reporting `same name, different content - keeping` when a filename was
+reused. Optional, but it is the safer way to empty the folder.
+
+Use `--apply --keep` to move files to a `tg-archived/` sibling instead of
+deleting — for a batch you would rather hold on the card until you have
+restored something from it and seen the file open.
 
 ### ⚠️ Back up the ledger — it is the only record of what is archived
 
@@ -379,9 +399,10 @@ scp -i ~/.ssh/immich_phone \
 ```
 
 `uploaded.sha256` is the **sole source of truth** for what has already been
-archived. Both duplicate checks — `tg-prune` on the phone and `tg-upload.sh` on
-the VM — read it and nothing else. Telegram is never asked, because
-`telegram-download` cannot list a channel without downloading all of it.
+archived. `tg-upload.sh` on the VM reads it on every batch, and the optional
+`tg-prune` on the phone reads it too; neither consults anything else. Telegram
+is never asked, because `telegram-download` cannot list a channel without
+downloading all of it.
 
 It lives at `/var/lib/insta360-archive/work/uploaded.sha256` on one VM, and
 nothing else backs it up.

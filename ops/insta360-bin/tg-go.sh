@@ -268,16 +268,10 @@ step "done"
 show_state
 echo
 echo
-echo "  ┌──────────────────────────────────────────────────────────────┐"
-echo "  │  ONE THING LEFT, on the PHONE, with the X4 still connected:  │"
-echo "  │                                                              │"
-echo "  │      ~/bin/tg-prune.sh --apply                               │"
-echo "  │                                                              │"
-echo "  │  Clears archived files from tg-batch so Syncthing does not    │"
-echo "  │  send them again. The VM cannot reach the card, so this is    │"
-echo "  │  the one step that cannot be automated.                      │"
-echo "  └──────────────────────────────────────────────────────────────┘"
-echo
-log "Safe to run any time the card is attached - including at the START of"
-log "your next session, which clears the last batch before Syncthing spends"
-log "any transfer on it."
+log "Nothing further is required. Archived files left in tg-batch will simply"
+log "be re-sent next time and rejected by hash - correct, but it costs the"
+log "card->VM transfer (~9 min and ~3% battery per 700 MB file)."
+log ""
+log "To avoid that, delete them from tg-batch when you next add footage, or"
+log "run the hash-checked version on the phone with the card attached:"
+log "  ~/bin/tg-prune.sh --apply"
