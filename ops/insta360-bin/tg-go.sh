@@ -267,5 +267,17 @@ fi
 step "done"
 show_state
 echo
-log "if that reports 0 remaining, the batch is safe to clear from the card:"
-log "  tg-prune --apply        (run this in Termux, on the phone)"
+echo
+echo "  ┌──────────────────────────────────────────────────────────────┐"
+echo "  │  ONE THING LEFT, on the PHONE, with the X4 still connected:  │"
+echo "  │                                                              │"
+echo "  │      ~/bin/tg-prune.sh --apply                               │"
+echo "  │                                                              │"
+echo "  │  Clears archived files from tg-batch so Syncthing does not    │"
+echo "  │  send them again. The VM cannot reach the card, so this is    │"
+echo "  │  the one step that cannot be automated.                      │"
+echo "  └──────────────────────────────────────────────────────────────┘"
+echo
+log "Safe to run any time the card is attached - including at the START of"
+log "your next session, which clears the last batch before Syncthing spends"
+log "any transfer on it."

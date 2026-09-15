@@ -24,7 +24,7 @@ Environment=PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbi
 
 # A full drain is ~250 GB at roughly 1.3 MB/s from the card, and the loop also
 # waits on Syncthing between batches. It is expected to run for days. Zero
-# disables the timeout entirely; use 'systemctl stop' or 'tg-archive pause'
+# disables the timeout entirely; use 'systemctl stop tg-archive'
 # to end it, not a timer.
 TimeoutStartSec=0
 

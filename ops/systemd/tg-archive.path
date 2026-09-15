@@ -1,0 +1,17 @@
+[Unit]
+Description=Watch Insta360 staging and start a drain when files land
+Documentation=file:///opt/personal-vault/docs/RUNBOOK.md
+# Without this a failed volume attach would leave the unit watching a path that
+# does not exist, and the drain would never fire.
+RequiresMountsFor=/mnt/media
+
+[Path]
+# PathChanged fires on EVERY write, so this deliberately triggers a settle timer
+# rather than the service itself. Starting the drain on the first byte would
+# upload while the card is still copying, with both legs competing for the same
+# connection - slower overall than waiting for the transfer to finish.
+PathChanged=/mnt/media/tg-staging
+Unit=tg-archive-settle.timer
+
+[Install]
+WantedBy=multi-user.target

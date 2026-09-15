@@ -1,0 +1,20 @@
+[Unit]
+Description=Wait for the card transfer to settle, then drain to Telegram
+Documentation=file:///opt/personal-vault/docs/RUNBOOK.md
+
+[Timer]
+# Two minutes of quiet after the last write to staging.
+#
+# Every file that lands re-activates tg-archive.path, which restarts this timer,
+# so a long multi-file transfer keeps pushing the deadline out and the drain
+# begins only once the card has actually finished. At ~1.3 MB/s over OTG a
+# single file can take many minutes, so a shorter delay would fire mid-transfer.
+OnActiveSec=120
+
+# Fire once per activation, not repeatedly. The drain loop handles everything
+# in staging and waits for more on its own.
+RemainAfterElapse=false
+Unit=tg-archive.service
+
+[Install]
+WantedBy=timers.target

@@ -68,7 +68,7 @@ export interface MetricsPayload {
    * and the collector reports `idle` when no drain has ever run.
    */
   archive?: {
-    status: 'idle' | 'running' | 'paused' | 'complete' | 'incomplete';
+    status: 'idle' | 'running' | 'complete' | 'incomplete';
     /** Files fingerprinted in the manifest. */
     total: number;
     /** Verified into Telegram. */

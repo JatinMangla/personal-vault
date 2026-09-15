@@ -259,9 +259,9 @@ Host immich
 
 ```bash
 tg-archive status     # done / remaining / staged / running
-tg-archive start      # drain until the card is done, or paused
-tg-archive pause      # stop after the current batch finishes
-tg-archive resume     # clear the pause flag
+tg-archive start      # drain until the card is empty
+systemctl stop tg-archive   # stop a runaway drain (safe: nothing unverified
+                            # is ever deleted, so the next run retries it)
 ```
 
 `start` keeps calling `tg-upload.sh` while staging refills, and exits after two
@@ -400,7 +400,7 @@ metrics collector picks it up every 15 minutes and `/status` renders it, so a
 multi-day drain can be watched from a browser without SSH.
 
 ```
-status=idle|running|paused|complete|incomplete
+status=idle|running|complete|incomplete
 total=34              # files fingerprinted in the manifest
 done=21               # verified into Telegram
 remaining=13
@@ -439,12 +439,44 @@ columns and no size — every reader treats a missing third field as *unknown*
 rather than zero, so the archived-bytes total on `/status` is reported as a
 lower bound (`12.4 GB+`) while any such rows remain. Parse the filename as
 field 2 exactly, never as "everything after field 1".
-| `.paused` | Present means paused. `resume` deletes it. |
+| `drain-state` | Written by `tg-archive` as it runs; the collector reads it for `/status`. |
 | `.loop.lock` | Held while a loop runs. The file persists; only the lock matters. |
 
 `uploaded.sha256` exists because `tg-upload.sh` clears staging on success and
 keeps no history of its own — without it nothing on the VM knows how far
 through the card you are.
+
+### Starting the drain automatically
+
+With these enabled, files landing in staging start a drain on their own — no
+command at all on the VM side:
+
+```bash
+sudo cp ~/personal-vault/ops/systemd/tg-archive.{path,service} \
+       ~/personal-vault/ops/systemd/tg-archive-settle.timer \
+       /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now tg-archive.path
+```
+
+`tg-archive.path` watches `/mnt/media/tg-staging` and activates
+`tg-archive-settle.timer`, which waits **two minutes of quiet** before starting
+the drain. The delay matters: `PathChanged` fires on every write, so going
+straight to the service would begin uploading on the first byte, while the card
+is still copying — both legs then compete for the same connection and the batch
+takes longer overall.
+
+Every file that lands re-arms the timer, so a long multi-file transfer keeps
+pushing the deadline out and the drain begins only once the card has finished.
+Repeated activation is harmless: `tg-archive` holds a `flock`, and a second
+invocation exits with "another tg-archive loop is already running".
+
+Check it:
+
+```bash
+systemctl status tg-archive.path
+journalctl -fu tg-archive          # follow a drain as it happens
+```
 
 ### Installing it
 

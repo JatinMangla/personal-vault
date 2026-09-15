@@ -385,6 +385,58 @@ the filename, found the content did not match, and reported
 `same name, different content - keeping` rather than deleting a file it could
 not verify. Name-matching alone would have deleted an unarchived original.
 
+### Under `set -o pipefail`, `pipeline || fallback` emits BOTH values
+
+Not a style nit — it produced three separate symptoms in one run:
+
+```
+line 119: 0
+0: syntax error in expression (error token is "0")
+ERROR: metrics push failed (HTTP 400000)
+{"accepted":true}
+```
+
+`du -sb "$d" | cut -f1 || echo 0`. With `pipefail`, the pipeline's status is the
+**first failing command's**, not the last. A `du` that hits an unreadable
+subdirectory prints a partial total *and* exits non-zero: `cut` emits a value,
+the pipeline is then non-zero, and `|| echo 0` emits a **second**. The variable
+holds `"0\n0"` and the next `$(( ))` dies.
+
+The same shape gave `HTTP 400000` — curl printed `200`, the `|| echo '000'`
+appended, and the log reported nonsense **for a push the server had accepted**.
+
+**Hidden for months because the collector only ever ran as root**, where `du`
+never fails. It surfaced the instant an `ops.env` permissions fix let it run as
+`ubuntu`. A permissions change is a plausible way to expose latent bugs in
+anything that shells out.
+
+The safe form is capture-then-validate:
+
+```bash
+out="$(du -sb "$d" 2>/dev/null | cut -f1 | head -1)"
+[[ "$out" =~ ^[0-9]+$ ]] && echo "$out" || echo 0
+```
+
+The distinction to apply: `a | b || c` is dangerous; `a < f || c` is not. A
+simple command with a redirect fails as one unit, so the seven remaining
+`|| echo` sites in that script are safe and were left alone.
+
+### Syncthing partials are `.syncthing.*.tmp` — so interruption needs no handling
+
+`tg-upload.sh` globs `"$STAGING_DIR"/*.insv`, which does **not** match
+`.syncthing.NAME.insv.tmp`. A half-transferred file is therefore invisible to
+the uploader: it sits in staging as a temp file and Syncthing resumes it when
+the card is reconnected.
+
+This is why pulling the cable mid-drain is safe with no cleanup, no state to
+record, and nothing to remove. **A pause/resume system was built for this case
+and deleted on 2026-09-15** once the behaviour was understood — roughly twenty
+lines, two commands, a dashboard state value and two lines of documentation,
+all for a problem that never existed.
+
+Worth checking before building recovery machinery: what does the tool already
+do when interrupted?
+
 ### `sha256sum /full/path` writes the full path into the manifest
 
 Not `sha256sum "$f"` — `( cd "$DIR" && sha256sum "$base" )`.

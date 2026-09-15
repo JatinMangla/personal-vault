@@ -42,9 +42,21 @@ done
 
 # du -sb on a directory that does not exist should report 0, not fail the run.
 dir_bytes() {
-  local d="$1"
+  local d="$1" out
   [[ -d "$d" ]] || { echo 0; return; }
-  du -sb "$d" 2>/dev/null | cut -f1 || echo 0
+
+  # Capture, then validate. NOT `du ... | cut -f1 || echo 0`.
+  #
+  # This script runs with `set -o pipefail`, so the pipeline's status is du's,
+  # not cut's. On a directory this user cannot fully read, du prints a partial
+  # total AND exits non-zero: cut emits a number, then the `||` fires and emits
+  # a second one. The variable then holds "0\n0", and the next arithmetic
+  # expansion dies with `syntax error in expression`.
+  #
+  # Invisible while the collector ran as root, because du never failed. It
+  # surfaced the first time it ran as ubuntu.
+  out="$(du -sb "$d" 2>/dev/null | cut -f1 | head -1)"
+  [[ "$out" =~ ^[0-9]+$ ]] && echo "$out" || echo 0
 }
 
 # Immich API call with a read-only key. Failure returns empty rather than
@@ -57,18 +69,33 @@ immich_api() {
     "${IMMICH_URL}/api${path}" 2>/dev/null || echo ''
 }
 
+# Exactly three integers, always. Same pipefail trap as dir_bytes: `df | tail -1
+# || echo "0 0 0"` can emit a real line AND the fallback, and `read -r A B C`
+# then silently takes the wrong one - wrong numbers rather than a loud error,
+# which is worse.
+df_line() {
+  local out a b c
+  out="$(df -B1 --output=size,used,avail "$1" 2>/dev/null | tail -1 | head -1)"
+  read -r a b c <<< "$out"
+  if [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ && "$c" =~ ^[0-9]+$ ]]; then
+    echo "$a $b $c"
+  else
+    echo "0 0 0"
+  fi
+}
+
 json_num() { [[ -n "${1:-}" ]] && echo "$1" || echo 0; }
 
 # --- Storage --------------------------------------------------------------
 
 # Block volume (media). df -B1 gives bytes.
 read -r BLOCK_TOTAL BLOCK_USED BLOCK_AVAIL < <(
-  df -B1 --output=size,used,avail "$MEDIA_DIR" 2>/dev/null | tail -1 || echo "0 0 0"
+  df_line "$MEDIA_DIR"
 )
 
 # Boot volume.
 read -r BOOT_TOTAL BOOT_USED BOOT_AVAIL < <(
-  df -B1 --output=size,used,avail / 2>/dev/null | tail -1 || echo "0 0 0"
+  df_line /
 )
 
 # Per-directory breakdown.
@@ -304,7 +331,11 @@ HTTP_CODE="$(curl -fsS -m 30 -o /tmp/metrics-response.json -w '%{http_code}' \
   -H 'Content-Type: application/json' \
   -H "X-Signature: sha256=$SIGNATURE" \
   -H "X-Timestamp: $TIMESTAMP" \
-  --data-raw "$BODY" 2>/dev/null || echo '000')"
+  --data-raw "$BODY" 2>/dev/null | tail -1 | head -1)"
+# Same pipefail trap, and it was visibly biting: a successful push printed 200,
+# the `|| echo '000'` appended a second line, and the log reported "HTTP
+# 400000" for a request the server had accepted. Validate rather than append.
+[[ "$HTTP_CODE" =~ ^[0-9]{3}$ ]] || HTTP_CODE='000'
 
 if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" || "$HTTP_CODE" == "204" ]]; then
   echo "[$(date -Is)] metrics pushed (HTTP $HTTP_CODE)"

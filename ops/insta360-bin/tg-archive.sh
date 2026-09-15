@@ -8,14 +8,13 @@
 # three things that were missing:
 #
 #   the outer loop   - keep draining until the card is done, not one batch
-#   pause / resume   - stop cleanly between files, restart where it left off
 #   status           - how far through the card are we
 #
-#   tg-archive start    begin draining; runs until done or paused
-#   tg-archive pause    stop after the current batch finishes
-#   tg-archive resume   clear the pause flag and continue
+#   tg-archive start    begin draining; runs until the card is empty
 #   tg-archive status   done / remaining / staged / running
-#   tg-archive stop     stop now, after the current batch
+#
+# Normally started by tg-archive.path when files land in staging, so neither
+# command needs typing in the usual case.
 #
 # WHY ONE BATCH AT A TIME, NOT ONE FILE.
 # tg-upload.sh already treats whatever is in staging as a batch and refuses to
@@ -24,11 +23,14 @@
 # whenever staging refills, so Syncthing's delivery rate sets the pace and
 # staging never holds more than Syncthing has moved.
 #
-# WHY PAUSE IS CHECKED BETWEEN BATCHES, NOT DURING ONE.
-# Killing an upload mid-file leaves a partial object in the channel and a file
-# still in staging that Check #2 never confirmed. Waiting for the current batch
-# to finish means every pause point is a consistent state: staging is empty and
-# everything in it was verified before deletion.
+# WHY THERE IS NO PAUSE COMMAND.
+# It was built for pulling the cable mid-drain, but that case never needed it:
+# Syncthing writes partial transfers as `.syncthing.NAME.insv.tmp`, and
+# tg-upload.sh globs `*.insv`, which does not match them. A half-synced file is
+# invisible to the uploader, stays in staging, and Syncthing resumes it on
+# reconnect. To stop a running drain, `systemctl stop tg-archive` or Ctrl+C -
+# both safe, because tg-upload.sh never deletes what it has not verified, so
+# the next run simply retries whatever was in flight.
 
 set -euo pipefail
 
@@ -51,8 +53,7 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 UPLOADER="$HERE/tg-upload.sh"
 
 # State lives beside the work directory, not in /tmp: a reboot must not look
-# like "never paused" or "nothing uploaded yet".
-PAUSE_FLAG="$WORK_DIR/.paused"
+# like "nothing uploaded yet".
 UPLOADED_LOG="$WORK_DIR/uploaded.sha256"
 LOOP_LOCK="$WORK_DIR/.loop.lock"
 
@@ -149,24 +150,7 @@ uploaded_bytes() {
 # direct tg-upload.sh run archived files that were never written down. Keeping
 # the logic in one place also stops the two copies drifting apart.
 
-paused() { [[ -e "$PAUSE_FLAG" ]]; }
-
 # --- commands --------------------------------------------------------------
-
-cmd_pause() {
-  : > "$PAUSE_FLAG"
-  log "pause requested - the loop will stop after the current batch"
-  log "nothing is interrupted mid-file; resume with: tg-archive resume"
-}
-
-cmd_resume() {
-  if [[ ! -e "$PAUSE_FLAG" ]]; then
-    log "not paused - nothing to resume"
-    return 0
-  fi
-  rm -f "$PAUSE_FLAG"
-  log "pause cleared - run 'tg-archive start' to continue draining"
-}
 
 cmd_status() {
   local total done_n staged remaining running="no"
@@ -195,7 +179,6 @@ cmd_status() {
   echo "remaining                               : $remaining"
   echo "currently in staging                    : $staged"
   echo "loop running                            : $running"
-  paused && echo "state                                   : PAUSED"
 
   if (( total == 0 )); then
     echo
@@ -211,11 +194,6 @@ cmd_status() {
 }
 
 cmd_start() {
-  if paused; then
-    err "paused - run 'tg-archive resume' first"
-    exit 1
-  fi
-
   # One loop at a time. tg-upload.sh has its own session lock for the upload
   # itself; this one stops two loops from both waiting on it.
   #
@@ -259,19 +237,12 @@ cmd_start() {
   fi
 
   log "draining - staging: $STAGING_DIR"
-  log "pause any time with: tg-archive pause"
+  log "stop with: systemctl stop tg-archive (safe at any point)"
   write_state running
 
   local pass=0 idle_passes=0 batch
 
   while true; do
-    if paused; then
-      log "paused after $pass batch(es) - staging is in a consistent state"
-      log "resume with: tg-archive resume && tg-archive start"
-      write_state paused
-      return 0
-    fi
-
     shopt -s nullglob
     batch=("$STAGING_DIR"/*.insv)
     shopt -u nullglob
@@ -318,7 +289,7 @@ cmd_start() {
     # this script exists to avoid.
     if "$UPLOADER"; then
       # tg-upload.sh records the batch in uploaded.sha256 itself, before it
-      # clears staging - see the note above cmd_pause.
+      # clears staging - see the note near the top of this file.
       log "batch $pass verified and recorded"
       write_state running
     else
@@ -329,23 +300,19 @@ cmd_start() {
   done
 }
 
-cmd_stop() { cmd_pause; }
-
 case "${1:-}" in
   start)  cmd_start  ;;
-  pause)  cmd_pause  ;;
-  resume) cmd_resume ;;
   status) cmd_status ;;
-  stop)   cmd_stop   ;;
   *)
     cat <<USAGE
 tg-archive - drain the camera card into Telegram
 
-  tg-archive start     begin draining; runs until done or paused
-  tg-archive pause     stop after the current batch finishes
-  tg-archive resume    clear the pause flag
+  tg-archive start     begin draining; runs until the card is empty
   tg-archive status    done / remaining / staged / running
-  tg-archive stop      same as pause
+
+Normally started automatically by tg-archive.path when files land in staging.
+To stop a running drain: systemctl stop tg-archive (safe - nothing unverified
+is ever deleted, so the next run retries it).
 
 Files are uploaded, downloaded back and hashed before staging is cleared.
 Nothing is deleted from the card by this script - it prints when a batch is
