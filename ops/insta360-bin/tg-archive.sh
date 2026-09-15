@@ -91,22 +91,11 @@ uploaded_names() {
 # success and keeps no record of its own, so without this nothing on the VM
 # knows how far through the card we are - status could only ever report "what
 # is in staging right now".
-record_uploaded() {
-  local -n _batch=$1
-  local f base line
-  for f in "${_batch[@]}"; do
-    base="$(basename "$f")"
-    # Reuse the manifest's own hash rather than re-reading a file that has
-    # already been deleted.
-    line="$(awk -v want="$base" '
-      { n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n)
-        if (n == want) { print $1; exit } }' "$MANIFEST")"
-    [[ -n "$line" ]] || line="unknown"
-    if ! grep -qF " $base" "$UPLOADED_LOG" 2>/dev/null; then
-      printf '%s %s\n' "$line" "$base" >> "$UPLOADED_LOG"
-    fi
-  done
-}
+# NOTE: recording into uploaded.sha256 deliberately lives in tg-upload.sh, not
+# here. That script is the one that knows a file survived the round trip, and
+# it is a supported entry point on its own - recording in this wrapper meant a
+# direct tg-upload.sh run archived files that were never written down. Keeping
+# the logic in one place also stops the two copies drifting apart.
 
 paused() { [[ -e "$PAUSE_FLAG" ]]; }
 
@@ -233,7 +222,8 @@ cmd_start() {
     # flood-wait ceiling would mean babysitting it again, which is the thing
     # this script exists to avoid.
     if "$UPLOADER"; then
-      record_uploaded batch
+      # tg-upload.sh records the batch in uploaded.sha256 itself, before it
+      # clears staging - see the note above cmd_pause.
       log "batch $pass verified and recorded"
     else
       err "batch $pass failed - staging left intact, will retry"

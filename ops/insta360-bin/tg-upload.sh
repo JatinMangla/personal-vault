@@ -248,6 +248,28 @@ if (( ! roundtrip_ok )); then
 fi
 
 log "Check #2 passed for all ${#batch[@]} file(s) - clearing staging"
+
+# Record what is now in the archive, BEFORE deleting it.
+#
+# This has to happen here rather than in a wrapper. tg-upload.sh is the only
+# thing that knows a file survived the round trip, and it is a supported entry
+# point on its own - run it directly and, until now, nothing was recorded at
+# all. The ledger then under-reported the archive forever: tg-prune would
+# re-send files already in Telegram, and tg-archive status would under-count.
+# That is exactly how the first uploaded file came to be invisible.
+#
+# Hash the verified file rather than copying the manifest's entry. The manifest
+# says what SHOULD be there; this file just proved what IS there, having gone
+# to Telegram and come back byte-identical. Recording the stronger fact costs
+# one read of a file already in page cache.
+for f in "${batch[@]}"; do
+  base="$(basename "$f")"
+  if ! grep -qF " $base" "$UPLOADED_LOG" 2>/dev/null; then
+    printf '%s %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$base" >> "$UPLOADED_LOG"
+  fi
+done
+log "recorded ${#batch[@]} file(s) in $(basename "$UPLOADED_LOG")"
+
 for f in "${batch[@]}"; do
   rm -f "$f"
 done
