@@ -253,6 +253,54 @@ export default function StatusPage() {
         )}
       </HealthCard>
 
+      {/* 3. Insta360 archive drain.
+          Rendered only when a sample carries it: the field is optional, and
+          every sample collected before the drain existed has no archive object
+          at all - not merely a missing number. */}
+      {payload.archive && payload.archive.total > 0 && (
+        <HealthCard
+          title="Camera archive"
+          state={payload.archive.status === 'incomplete' ? 'amber' : 'green'}
+        >
+          <StatRow label="Files on the card" value={payload.archive.total.toLocaleString()} />
+          <StatRow
+            label="In Telegram"
+            value={payload.archive.done.toLocaleString()}
+          />
+          <StatRow
+            label="Remaining"
+            value={payload.archive.remaining.toLocaleString()}
+            state={payload.archive.remaining > 0 ? 'amber' : 'green'}
+          />
+          <div className="mt-075">
+            <LimitMeter
+              label="Drained"
+              used={payload.archive.done}
+              limit={payload.archive.total}
+              state={payload.archive.remaining > 0 ? 'amber' : 'green'}
+            />
+          </div>
+          <StatRow
+            label="Drain state"
+            value={payload.archive.status}
+            state={payload.archive.status === 'incomplete' ? 'amber' : 'green'}
+          />
+          {payload.archive.updated > 0 && (
+            <StatRow
+              label="Last progress"
+              value={formatRelative(payload.archive.updated * 1000)}
+            />
+          )}
+          {payload.archive.status === 'incomplete' && (
+            <p className="faint">
+              The drain stopped with files still unarchived — Syncthing may have
+              stalled, or the card was disconnected. Reconnect it and run{' '}
+              <code>tg-archive start</code> again.
+            </p>
+          )}
+        </HealthCard>
+      )}
+
       {/* 4. System */}
       <HealthCard title="System" state={worstState([ramState, bootState, ...containers.map((c) => c.state)])}>
         <LimitMeter

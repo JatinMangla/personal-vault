@@ -60,6 +60,33 @@ IDLE_WAIT_SECONDS="${IDLE_WAIT_SECONDS:-300}"
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }
 
+# Drain progress is written to a state file rather than pushed anywhere.
+#
+# The metrics collector reads it every 15 minutes and the /status dashboard
+# renders it, so progress is visible on a phone without SSH and without a
+# notification service. A file is the right interface here: this loop runs for
+# days, the collector is a separate process on its own timer, and neither
+# should have to know the other exists.
+STATE_FILE="$WORK_DIR/drain-state"
+
+write_state() {
+  local status="$1" total_n done_n remaining_n
+  total_n=$(manifest_names | sort -u | wc -l)
+  done_n=$(uploaded_names | sort -u | wc -l)
+  remaining_n=$(( total_n - done_n ))
+  (( remaining_n < 0 )) && remaining_n=0
+
+  # Written atomically. The collector may read this at any moment, and a
+  # half-written file would surface as a wrong number on the dashboard.
+  {
+    printf 'status=%s\n' "$status"
+    printf 'total=%s\n' "$total_n"
+    printf 'done=%s\n' "$done_n"
+    printf 'remaining=%s\n' "$remaining_n"
+    printf 'updated=%s\n' "$(date +%s)"
+  } > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
 mkdir -p "$WORK_DIR"
 touch "$UPLOADED_LOG"
 
@@ -186,6 +213,7 @@ cmd_start() {
 
   log "draining - staging: $STAGING_DIR"
   log "pause any time with: tg-archive pause"
+  write_state running
 
   local pass=0 idle_passes=0 batch
 
@@ -193,6 +221,7 @@ cmd_start() {
     if paused; then
       log "paused after $pass batch(es) - staging is in a consistent state"
       log "resume with: tg-archive resume && tg-archive start"
+      write_state paused
       return 0
     fi
 
@@ -205,6 +234,25 @@ cmd_start() {
       if (( idle_passes >= 2 )); then
         log "staging empty for two passes - the card appears drained"
         log "run 'tg-archive status' to confirm against the manifest"
+
+        # Report against the manifest, not just "the loop ended". A drain that
+        # stopped early because Syncthing stalled looks identical from inside
+        # the loop; the remaining count is what distinguishes them.
+        local total_n done_n remaining_n
+        total_n=$(manifest_names | sort -u | wc -l)
+        done_n=$(uploaded_names | sort -u | wc -l)
+        remaining_n=$(( total_n - done_n ))
+        (( remaining_n < 0 )) && remaining_n=0
+
+        if (( remaining_n == 0 )); then
+          log "all $total_n file(s) in the manifest are archived"
+          write_state complete
+        else
+          err "drain ended with $remaining_n file(s) still unarchived"
+          err "Syncthing may have stalled, or the card was disconnected early"
+          write_state incomplete
+        fi
+
         return 0
       fi
       log "staging empty - waiting ${IDLE_WAIT_SECONDS}s for Syncthing to deliver more"
@@ -225,6 +273,7 @@ cmd_start() {
       # tg-upload.sh records the batch in uploaded.sha256 itself, before it
       # clears staging - see the note above cmd_pause.
       log "batch $pass verified and recorded"
+      write_state running
     else
       err "batch $pass failed - staging left intact, will retry"
       err "if this repeats, run tg-upload.sh by hand to see the full output"

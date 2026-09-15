@@ -88,6 +88,30 @@ BACKUPS_BYTES=$(dir_bytes "$MEDIA_DIR/backups")
 # between the camera card and Telegram. Without it on the dashboard, a transfer
 # in progress inflates the block-volume gauge with nothing to account for it.
 STAGING_BYTES=$(dir_bytes "$MEDIA_DIR/tg-staging")
+
+# Insta360 drain progress, written by tg-archive. Absent until a drain has run,
+# so every field defaults to zero rather than failing the push - a collector
+# that dies because an optional file is missing takes the whole dashboard with
+# it, including the parts that were working.
+DRAIN_STATE="${INSTA360_WORK_DIR:-/var/lib/insta360-archive/work}/drain-state"
+DRAIN_STATUS="idle"
+DRAIN_TOTAL=0
+DRAIN_DONE=0
+DRAIN_REMAINING=0
+DRAIN_UPDATED=0
+if [[ -r "$DRAIN_STATE" ]]; then
+  # Read as key=value rather than sourcing it: this file is written by another
+  # process, and sourcing would execute whatever it contains.
+  while IFS='=' read -r k v; do
+    case "$k" in
+      status)    DRAIN_STATUS="$v" ;;
+      total)     DRAIN_TOTAL="$v" ;;
+      done)      DRAIN_DONE="$v" ;;
+      remaining) DRAIN_REMAINING="$v" ;;
+      updated)   DRAIN_UPDATED="$v" ;;
+    esac
+  done < "$DRAIN_STATE"
+fi
 ORIGINALS_BYTES=$((UPLOAD_BYTES + LIBRARY_BYTES))
 
 # --- Immich statistics ----------------------------------------------------
@@ -212,6 +236,13 @@ read -r -d '' PAYLOAD <<JSON || true
     "profile_bytes": ${PROFILE_BYTES:-0},
     "staging_bytes": ${STAGING_BYTES:-0},
     "backups_bytes": ${BACKUPS_BYTES:-0}
+  },
+  "archive": {
+    "status": "${DRAIN_STATUS}",
+    "total": $(json_num "$DRAIN_TOTAL"),
+    "done": $(json_num "$DRAIN_DONE"),
+    "remaining": $(json_num "$DRAIN_REMAINING"),
+    "updated": $(json_num "$DRAIN_UPDATED")
   },
   "immich": {
     "photo_count": $(json_num "$PHOTO_COUNT"),

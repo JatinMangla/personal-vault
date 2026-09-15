@@ -347,6 +347,27 @@ transfer at ~1.3 MB/s. The files themselves stay safe in Telegram.
 A wrong line is as bad as a missing file — a bad hash means that file
 re-uploads. Keep the backup somewhere that is neither the phone nor the VM.
 
+### Watching the drain from your phone
+
+`tg-archive` writes its progress to `$WORK_DIR/drain-state` as it runs. The
+metrics collector picks it up every 15 minutes and `/status` renders it, so a
+multi-day drain can be watched from a browser without SSH.
+
+```
+status=running|complete|incomplete
+total=34        # files fingerprinted in the manifest
+done=21         # verified into Telegram
+remaining=13
+updated=<unix timestamp>
+```
+
+`status` distinguishes finishing from giving up. A drain that stopped because
+Syncthing stalled or the cable was pulled looks identical from inside the loop —
+two empty passes either way — so the remaining count is what separates them.
+
+The dashboard figure is up to 15 minutes old. For the live number, use
+`tg-archive status` on the VM.
+
 ### State files, under `WORK_DIR`
 
 | File | Meaning |

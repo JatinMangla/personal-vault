@@ -62,6 +62,21 @@ export interface MetricsPayload {
      */
     staging_bytes?: number;
   };
+  /**
+   * Insta360 card -> Telegram drain progress, from tg-archive's state file.
+   * Optional for the same reason as staging_bytes: older samples predate it,
+   * and the collector reports `idle` when no drain has ever run.
+   */
+  archive?: {
+    status: 'idle' | 'running' | 'paused' | 'complete' | 'incomplete';
+    /** Files fingerprinted in the manifest. */
+    total: number;
+    /** Verified into Telegram. */
+    done: number;
+    remaining: number;
+    /** Unix seconds when tg-archive last wrote its state. */
+    updated: number;
+  };
   immich: {
     photo_count: number;
     video_count: number;
