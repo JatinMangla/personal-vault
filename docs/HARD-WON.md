@@ -357,9 +357,12 @@ speed suggests. **Size batches at 10–20GB**, one charge each.
 [13:49:06] removed VID_20250219_155539_00_032.insv
 ```
 
-(That run predates 2026-09-15's change from deleting to moving. `--apply` now
-relocates archived files to a `tg-archived/` sibling; `--apply --delete` is the
-opt-in that still removes them.)
+(`--apply` deletes, and deliberately so: the operator clearing `tg-batch` by
+hand has no hash to check against, and deleting footage that was never uploaded
+is the unrecoverable mistake. The script removes a file only when its SHA-256 is
+in `uploaded.sha256`, written only after a verified Telegram round trip; a name
+match with different content is reported and KEPT. `--apply --keep` moves to a
+`tg-archived/` sibling instead, for a batch to hold on the card longer.)
 
 Two bugs surfaced on the way, both worth keeping in mind:
 

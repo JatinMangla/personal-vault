@@ -238,12 +238,13 @@ Run this in Termux **before connecting the card**:
 
 ```bash
 tg-prune            # dry run - what is already archived
-tg-prune --apply    # move those to ../tg-archived (nothing deleted)
+tg-prune --apply    # delete those from tg-batch (verified archived first)
 ```
 
 It fetches the VM's ledger over Tailscale (a few KB), compares it against
-`tg-batch`, and moves files already in the archive into `tg-archived/` so
-Syncthing never sends them again. It prints how much transfer it saved.
+`tg-batch`, and deletes files already in the archive so Syncthing never sends
+them again. It prints how much transfer it saved. (`--apply --keep` moves them
+to a `tg-archived/` sibling instead of deleting.)
 
 **This is where the real saving is.** The VM-side check below prevents a
 duplicate reaching Telegram, but by then the file has already crossed the cable
@@ -255,16 +256,18 @@ It compares by name first and only hashes when a name matches, so a reused
 filename with new footage is kept, not mistaken for an upload that already
 happened.
 
-**`--apply` moves files, it does not delete them.** Archived files go to
-`tg-archived/`, a sibling of `tg-batch`. Syncthing watches `tg-batch` alone, so
-moving a file out stops it being sent just as effectively as deleting it —
-without destroying anything.
+**`--apply` deletes from `tg-batch`**, and that is the safer option in practice.
 
-That matters if you **move** footage into `tg-batch` rather than copying it: the
-files there would be your only originals. Moving is safe either way, so the
-script does not need to know which you did. `--apply --delete` still deletes,
-for when you are certain copies exist elsewhere. It refuses to run against any
-directory not named `tg-batch`.
+The alternative is clearing `tg-batch` by hand, and a person has no hash to
+check against — deleting footage that was never uploaded is a real and
+unrecoverable mistake. `tg-prune` removes a file only when its SHA-256 appears
+in `uploaded.sha256`, which is written only after that file went to Telegram,
+came back, and matched byte for byte. Anything it cannot verify is left alone:
+a name match with different content is reported and kept.
+
+`--apply --keep` moves to a `tg-archived/` sibling instead, for a batch you want
+to hold on the card a while longer. The dry run is the default, and it refuses
+to run against any directory not named `tg-batch`.
 
 ### Re-syncing the same file does not re-upload it
 
@@ -309,9 +312,16 @@ that went out, or the check fails.
 
 **What this does not prove:** that the copy in `tg-batch` on the card was
 identical to what reached staging. That leg is Syncthing's, which hashes every
-block it transfers — solid, but not a checksum you control. This is why
-`tg-prune --apply` **moves** rather than deletes by default: it costs nothing
-to keep the card copy until you have decided the archive is trustworthy.
+block it transfers — solid, but not a checksum you control.
+
+In practice that gap is narrow, and `tg-prune --apply` deletes from `tg-batch`
+on the strength of it, because the alternative is worse: clearing the folder by
+hand means deciding without a hash, and deleting footage that was never
+uploaded is the unrecoverable mistake. The script deletes only what it has
+matched against `uploaded.sha256`, and keeps anything it cannot verify.
+
+Use `--apply --keep` for a batch you would rather hold on the card until you
+have restored something from it and seen the file open.
 
 ### ⚠️ Back up the ledger — it is the only record of what is archived
 

@@ -16,19 +16,21 @@
 #   tg-prune              show what would be removed, remove nothing
 #   tg-prune --apply      actually remove them
 #
-# SAFETY. --apply MOVES archived files out of tg-batch into a sibling folder
-# (tg-archived) rather than deleting them. Syncthing syncs tg-batch only, so
-# moving a file out stops it being sent just as effectively as deleting it -
-# and nothing is ever destroyed.
+# SAFETY. --apply DELETES archived files from tg-batch. That is deliberate, and
+# it is the safer of the two options in practice.
 #
-# This matters because tg-batch does not necessarily hold copies. An earlier
-# version of this comment asserted that it did, and built the delete on that
-# assumption. If files are MOVED into tg-batch rather than copied, they are the
-# only originals, and a delete would be unrecoverable. Moving is correct either
-# way, so the script does not need to know which.
+# The alternative is the operator clearing tg-batch by hand, and a human has no
+# hash to check against - deleting footage that was never uploaded is a real
+# mistake and an unrecoverable one. This script deletes a file only when its
+# SHA-256 appears in uploaded.sha256, which is written only after that file went
+# to Telegram, came back, and matched. A file it cannot verify is never touched:
+# a name match with different content is reported and KEPT.
 #
-# `--delete` still deletes, for when you are certain copies exist elsewhere.
-# It refuses to run against any directory not named tg-batch.
+# `--apply --keep` moves to a tg-archived/ sibling instead of deleting, for a
+# batch you want to hold on the card a while longer.
+#
+# It refuses to run against any directory not named tg-batch, and the dry run
+# is the default.
 
 set -euo pipefail
 
@@ -41,15 +43,15 @@ VM_LEDGER="${VM_LEDGER:-/var/lib/insta360-archive/work/uploaded.sha256}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/immich_phone}"
 
 APPLY=0
-DELETE=0
+KEEP=0
 for arg in "$@"; do
   case "$arg" in
-    --apply)  APPLY=1 ;;
-    --delete) DELETE=1 ;;
+    --apply) APPLY=1 ;;
+    --keep)  KEEP=1 ;;
     -h|--help)
-      echo "tg-prune                    dry run - show what is already archived"
-      echo "tg-prune --apply            MOVE archived files to ../tg-archived"
-      echo "tg-prune --apply --delete   delete them instead (only if copies exist)"
+      echo "tg-prune                  dry run - show what is already archived"
+      echo "tg-prune --apply          DELETE archived files from tg-batch"
+      echo "tg-prune --apply --keep   move them to ../tg-archived instead"
       exit 0
       ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -204,26 +206,30 @@ DONE_DIR="$(dirname "$BATCH_DIR")/tg-archived"
 
 if (( ! APPLY )); then
   echo
-  log "DRY RUN - nothing moved. These are already in Telegram:"
+  log "DRY RUN - nothing changed. These are already in Telegram:"
   for f in "${archived[@]}"; do echo "    $(basename "$f")"; done
   echo
-  if (( DELETE )); then
-    log "run 'tg-prune --apply --delete' to DELETE them"
-    log "  only do this if you are certain copies exist elsewhere"
+  if (( KEEP )); then
+    log "run 'tg-prune --apply --keep' to move them to $DONE_DIR"
   else
-    log "run 'tg-prune --apply' to move them to $DONE_DIR"
+    log "run 'tg-prune --apply' to delete them from tg-batch"
+    log "  each one is verified present in Telegram before it is removed"
   fi
   exit 0
 fi
 
 echo
 
-if (( DELETE )); then
+if (( ! KEEP )); then
+  # Every file here has been hash-matched against uploaded.sha256, which is
+  # written only after a successful Telegram round trip. Anything unverified
+  # was filtered out long before this point.
   for f in "${archived[@]}"; do
     rm -f "$f" && log "deleted $(basename "$f")"
   done
-  log "done - ${#fresh[@]} file(s) left to sync"
-  log "DELETED from the card. Recoverable only from Telegram."
+  log "done - deleted ${#archived[@]} file(s) already in Telegram"
+  log "${#fresh[@]} file(s) left in tg-batch to sync"
+  log "these were verified in the archive first; recover with restore.sh"
 else
   # Out of tg-batch, not out of existence. Syncthing watches tg-batch alone, so
   # a sibling directory is invisible to it - the transfer stops either way, and
