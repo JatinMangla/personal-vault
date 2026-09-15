@@ -94,7 +94,11 @@ Running on Oracle `immich-mumbai`, Tailscale `100.88.183.74`, public
 | Metrics collector | `api_ok: true`, 0 failed jobs, pushing every 15 min |
 | Dashboard | renders real storage, RAM, uptime, container dots |
 | healthchecks.io ping | succeeds (no `curl: (22)`) |
-| **P1: zero open ports** | **VERIFIED from outside** — 22, 80, 443, 2283, 111, 3000, 5432, 8080 all closed/filtered |
+| **P1: zero open TCP ports** | **VERIFIED from outside** — 22, 80, 443, 2283, 111, 3000, 5432, 8080 all closed/filtered |
+
+> **P1 amended 2026-09-15: UDP 41641 is now open by decision.** The TCP result
+> above still holds and was re-checked. See "P1 amended" below for the reasoning
+> and for what the original claim did and did not actually prove.
 
 Admin access is Tailscale-only, from an Android phone via Termux. There is no
 laptop dependency: the office laptop's key was deliberately not relied on, and
@@ -225,8 +229,60 @@ vault* (Supabase Storage), not to Immich. The two are separate systems. The
 restic job backs up `/mnt/media` on the Oracle VM, which these files never
 touch — so this use does not advance the restore-drill gate.
 
-P1 (`nmap` zero open ports) and P7 (metrics every 15 min) are **done** — see the
-Part 2 section above.
+P1 (`nmap` zero open **TCP** ports) and P7 (metrics every 15 min) are **done** —
+see the Part 2 section above, and "P1 amended" for the UDP 41641 exception.
+
+## P1 amended — UDP 41641 opened deliberately (2026-09-15)
+
+Every byte of the Insta360 archive was crossing Tailscale's Bangalore DERP
+relay at ~1.3 MB/s. DERP is a keep-alive fallback for failed NAT traversal,
+deliberately rate-limited and never intended for bulk transfer. Three
+measurements ruled out the card, the reader and the cable — the card itself
+reads at ~71 MB/s, 55× faster than the transfer achieved, and the source made
+no difference. Full evidence in `docs/HARD-WON.md`.
+
+The VM is the easy side of the handshake: `netcheck` reports `UDP: true`, a
+public IPv4, and `MappingVariesByDestIP: false`. The phone is behind CGNAT or
+symmetric NAT on a consumer ISP with no address to punch back to. Hole-punching
+therefore fails from both directions, and **one reachable endpoint is enough** —
+making the VM reachable lets the phone dial in.
+
+### What the original P1 claim actually proved
+
+`nmap -Pn -p-` **scans TCP only.** The verified ports — 22, 80, 443, 2283, 111,
+3000, 5432, 8080 — are all TCP. `nmap -sU` was never run.
+
+So the UDP surface was never *verified* closed; it was *assumed* closed and then
+written up as "zero open ports", which is wider than the evidence collected.
+Opening 41641 does not falsify a measurement. It falsifies a sentence that was
+always broader than what was tested. The wording is now narrowed to match the
+evidence, which is a correction that was owed regardless of this change.
+
+### What is behind the port
+
+WireGuard, and nothing else. It is encrypted and authenticated, and it drops
+packets without a valid key **without replying** — so a UDP scan typically
+cannot confirm anything is listening. No service, no banner, no handshake to
+fingerprint. Materially different from exposing SSH, which announces
+`SSH-2.0-OpenSSH_9.6` to anyone who connects.
+
+This is not a claim that the port is harmless. It is a claim that the exposure
+is a single audited protocol with no pre-authentication surface, traded for a
+10× throughput gain on a 250 GB transfer: **~53 hours relayed vs ~5 direct.**
+
+### Reversible
+
+Deleting the ingress rule returns the link to relaying automatically. Nothing
+breaks; it slows down. That reversibility is part of why this was an acceptable
+trade rather than a one-way door.
+
+### Verify after opening
+
+```bash
+tailscale ping 100.104.203.100   # want "via 152.67.1.135:41641", not DERP
+tailscale status                 # want "direct", not relay "blr"
+nmap -sU -p 41641 152.67.1.135   # expect open|filtered - WireGuard does not reply
+```
 
 **The restore drill is the one that matters most.** A backup that has never been
 restored is a hypothesis. It ran on 2026-09-10 and returned `PASS (DB-ONLY)` in

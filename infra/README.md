@@ -49,9 +49,14 @@ infra/
    150 GB block volume at **0 VPU**.
 2. **Run the playbook** against the public IP. This installs and hardens
    everything, including Tailscale.
-3. **Delete every ingress rule** in the OCI security list.
+3. **Delete every ingress rule** in the OCI security list, then add back only
+   **UDP 41641** (Tailscale direct). Without it Tailscale relays through DERP at
+   roughly 1.3 MB/s instead of 10–15 MB/s — see `docs/BUILD-STATE.md`.
+   Note `roles/hardening` already opens 41641/udp in ufw, so the host firewall
+   needs nothing; the OCI security list is the only place this is gated.
 4. **Verify** with `nmap -Pn -p- <public-ip>` from outside — expect zero open
-   ports. This is the P1 acceptance criterion.
+   **TCP** ports. This is the P1 acceptance criterion. `-p-` does not scan UDP,
+   so it says nothing about 41641 either way.
 5. **Re-run the playbook** against the Tailscale address to confirm it still
    applies cleanly with no public path.
 6. **`docs/immich-settings.md`** — transcoding policy, HEIC handling, automatic
@@ -113,8 +118,12 @@ them either costs money or costs data.
 ## Verifying the security posture
 
 ```bash
-# From outside — the real test
+# From outside — the real test. TCP only; expect zero open.
 nmap -Pn -p- <public-ip>
+
+# UDP 41641 is open by decision. WireGuard never replies without a valid key,
+# so this reports open|filtered rather than confirming anything is listening.
+nmap -sU -p 41641 <public-ip>
 
 # On the box
 sudo ufw status verbose            # deny incoming; allow on tailscale0

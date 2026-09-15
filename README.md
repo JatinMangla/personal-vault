@@ -147,7 +147,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | Phase | Deliverable | Status |
 |---|---|---|
 | P0 | Repo, CLAUDE.md, agents, skills, hooks | **Done** — hook verified 14/14 |
-| P1 | Oracle VM, volumes, Tailscale | **Done** — zero open ports verified from outside |
+| P1 | Oracle VM, volumes, Tailscale | **Done** — zero open TCP ports verified; UDP 41641 open by decision |
 | P2 | Immich running, hardened, tuned | **Done** — all containers healthy, Tailscale-only |
 | P3 | **Backup + verified restore** (gate) | Backup runs and verifies; drill **PASS (DB-ONLY)** — media path untested |
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
@@ -183,8 +183,12 @@ Note for this machine: `npm` works from PowerShell but fails under Git Bash
 
 ## Security posture
 
-- **No inbound ports** on the media server. Access is via Tailscale only, which
+- **No inbound TCP ports** on the media server. Access is via Tailscale, which
   makes outbound connections and negotiates a direct WireGuard tunnel.
+  **One UDP exception, opened deliberately:** port 41641 for Tailscale's direct
+  path. Without it the link falls back to a rate-limited relay at ~1.3 MB/s.
+  Behind that port is WireGuard alone — authenticated, and silent to anything
+  without a valid key. Reasoning and the trade-off in `docs/BUILD-STATE.md`.
 - **Client-side encryption** for documents: AES-256-GCM in 4 MB chunks with a
   fresh random IV per chunk, keys derived with PBKDF2-SHA256 at 600,000
   iterations, held in memory only and marked non-extractable.
