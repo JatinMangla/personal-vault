@@ -329,6 +329,22 @@ Environment=PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
 job, which failed claiming a file did not exist while it was plainly readable to
 root. The Telethon session file would hit the same wall.
 
+**This has now bitten three units.** `metrics-push.service` hit it on
+2026-09-16: the collector reads the Syncthing API key from
+`/home/ubuntu/.local/state/syncthing/config.xml`, and under `ProtectHome=true`
+that file is simply invisible. There is no error — `sync_key()` returns empty,
+the sync block reports `state: "unknown"` forever, and nothing says why.
+
+**The diagnostic:** if `payload->'sync'->>'state'` is `null` or `unknown` while
+Syncthing is plainly running, it is this and not the API key.
+
+**4. `AccuracySec=1s` on any timer under ~5 minutes.** systemd defaults to
+`AccuracySec=1min`, which lets it coalesce timers anywhere inside that window to
+save wakeups. On the 1-minute `metrics-push.timer` that makes arrivals erratic —
+gaps of two minutes, then two pushes seconds apart — and the dashboard's
+staleness banner then fires on a collector that is perfectly healthy. Harmless
+at 15 minutes, which is why it was never needed before.
+
 ---
 
 ## The phone (Oppo Reno 10x Zoom, Android 12, ColorOS)

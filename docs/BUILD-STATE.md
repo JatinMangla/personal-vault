@@ -91,7 +91,7 @@ Running on Oracle `immich-mumbai`, Tailscale `100.88.183.74`, public
 |---|---|
 | Containers | server, postgres, ML, redis — **all healthy** |
 | Immich API | answers on the Tailscale address only |
-| Metrics collector | `api_ok: true`, 0 failed jobs, pushing every 15 min |
+| Metrics collector | `api_ok: true`, 0 failed jobs, pushing every 1 min |
 | Dashboard | renders real storage, RAM, uptime, container dots |
 | healthchecks.io ping | succeeds (no `curl: (22)`) |
 | **P1: zero open TCP ports** | **VERIFIED from outside** — 22, 80, 443, 2283, 111, 3000, 5432, 8080 all closed/filtered |
@@ -229,7 +229,7 @@ vault* (Supabase Storage), not to Immich. The two are separate systems. The
 restic job backs up `/mnt/media` on the Oracle VM, which these files never
 touch — so this use does not advance the restore-drill gate.
 
-P1 (`nmap` zero open **TCP** ports) and P7 (metrics every 15 min) are **done** —
+P1 (`nmap` zero open **TCP** ports) and P7 (metrics every 1 min) are **done** —
 see the Part 2 section above, and "P1 amended" for the UDP 41641 exception.
 
 ## P1 amended — UDP 41641 opened deliberately (2026-09-15)

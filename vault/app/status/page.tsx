@@ -41,6 +41,47 @@ interface LatestResponse {
   serverTime: number;
 }
 
+/**
+ * The drain's current step, in words the operator reads rather than the token
+ * the script writes.
+ *
+ * Returns null for both "this sample predates phase markers" and "no batch is
+ * running": tg-upload.sh clears the phase to an empty string on exit, precisely
+ * so a killed run cannot leave `uploading` on the dashboard forever. Neither
+ * case is a phase, and `!phase` catches both — a truthiness check, not a
+ * comparison against undefined, because '' must fall through it too.
+ */
+function phaseLabel(archive: MetricsPayload['archive']): string | null {
+  const phase = archive?.phase;
+  if (!phase) return null;
+
+  const file = archive?.phase_file ?? '';
+  const index = archive?.phase_index ?? 0;
+  const total = archive?.phase_total ?? 0;
+
+  switch (phase) {
+    case 'hashing':
+      return total > 0 ? `Hashing ${total} file(s)` : 'Hashing the batch';
+    case 'uploading':
+      return total > 0
+        ? `Uploading ${index} of ${total}${file ? ` · ${file}` : ''}`
+        : 'Uploading to Telegram';
+    case 'downloading':
+      return 'Downloading the channel to verify';
+    case 'rejoining':
+      return file ? `Rejoining parts of ${file}` : 'Rejoining parts';
+    case 'verifying':
+      return file ? `Verifying ${file}` : 'Verifying hashes';
+    case 'clearing':
+      return 'Clearing staging';
+    default:
+      // An unrecognised phase is still information: a newer script writing a
+      // phase this page has not learned yet should show the raw token rather
+      // than silently nothing.
+      return phase;
+  }
+}
+
 export default function StatusPage() {
   const [data, setData] = useState<LatestResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -66,8 +107,13 @@ export default function StatusPage() {
   useEffect(() => {
     void load();
     // Refresh at half the collection interval so the page is never more than
-    // one cycle behind what the server knows.
-    const id = setInterval(() => void load(), 7 * 60 * 1000);
+    // one cycle behind what the server knows. The collector pushes every
+    // minute (ops/systemd/metrics-push.timer), so 30 s.
+    //
+    // This is as live as the architecture allows: the VM has no inbound ports
+    // and Vercel cannot reach it over Tailscale, so the page can only ever show
+    // what was last pushed. Near-live, never realtime.
+    const id = setInterval(() => void load(), 30 * 1000);
     return () => clearInterval(id);
   }, [load]);
 
@@ -120,6 +166,19 @@ export default function StatusPage() {
   const jobsState = failedJobsState(payload.immich.failed_jobs);
   const checkState = integrityState(payload.backup.last_check_status);
 
+  // Syncthing's own folder state. `error` is the one that needs attention - a
+  // missing .stfolder marker parks the folder there and nothing transfers.
+  // `unknown` means the collector could not read the API key at all, which is
+  // also not healthy: it is the ProtectHome trap, and showing green for a
+  // number nobody could measure is the failure the staleness rule exists for.
+  const syncState: HealthState = !payload.sync
+    ? 'green'
+    : payload.sync.state === 'error'
+      ? 'red'
+      : payload.sync.state === 'unknown'
+        ? 'amber'
+        : 'green';
+
   const containers = [
     { name: 'server', status: payload.containers.server, state: containerState(payload.containers.server) },
     { name: 'ML', status: payload.containers.machine_learning, state: containerState(payload.containers.machine_learning) },
@@ -138,6 +197,7 @@ export default function StatusPage() {
     drillState,
     jobsState,
     checkState,
+    syncState,
     ...containers.map((c) => c.state),
   ]);
 
@@ -253,15 +313,105 @@ export default function StatusPage() {
         )}
       </HealthCard>
 
-      {/* 3. Insta360 archive drain.
-          Rendered only when a sample carries it: the field is optional, and
-          every sample collected before the drain existed has no archive object
-          at all - not merely a missing number. */}
+      {/* 3a. Card -> VM, the Syncthing half.
+          Rendered only when a sample carries the block. `sync` is a missing
+          OBJECT on older samples, not a missing number: the collector did not
+          query Syncthing at all before 2026-09-16, so this must be guarded one
+          level higher than staging_bytes was. */}
+      {payload.sync && (
+        <HealthCard title="Card → VM (Syncthing)" state={syncState}>
+          <StatRow
+            label="Transfer state"
+            value={payload.sync.state}
+            state={syncState}
+          />
+          <StatRow
+            label="Phone"
+            value={payload.sync.connected ? 'connected' : 'not connected'}
+            state={payload.sync.connected ? 'green' : 'amber'}
+          />
+          <StatRow
+            label="Files announced"
+            value={(payload.sync.global_files ?? 0).toLocaleString()}
+          />
+          <StatRow
+            label="Received"
+            value={(payload.sync.local_files ?? 0).toLocaleString()}
+          />
+          {(payload.sync.need_files ?? 0) > 0 && (
+            <StatRow
+              label="Still to arrive"
+              value={`${(payload.sync.need_files ?? 0).toLocaleString()} file(s) · ${formatBytes(payload.sync.need_bytes ?? 0)}`}
+              state="amber"
+            />
+          )}
+          {(payload.sync.global_files ?? 0) > 0 && (
+            <div className="mt-075">
+              <LimitMeter
+                label="Delivered"
+                used={payload.sync.local_files ?? 0}
+                limit={payload.sync.global_files ?? 0}
+                state={(payload.sync.need_files ?? 0) > 0 ? 'amber' : 'green'}
+              />
+            </div>
+          )}
+          {(payload.sync.need_bytes ?? 0) > 0 && (
+            /* 12 MB/s is the midpoint of the 10-16 MB/s measured on a DIRECT
+               Tailscale link (2026-09-15). It was 1.3 MB/s while the connection
+               relayed through DERP, so if this ever reads wildly optimistic,
+               check `tailscale status` for "relay" rather than "direct". */
+            <StatRow
+              label="Est. time left"
+              value={formatDuration((payload.sync.need_bytes ?? 0) / 12_000_000)}
+            />
+          )}
+          <StatRow label="In staging" value={formatBytes(payload.storage.staging_bytes ?? 0)} />
+          <div className="mt-075">
+            <LimitMeter
+              label="Boot volume"
+              used={payload.storage.boot_used}
+              limit={payload.storage.boot_total}
+              state={bootState}
+              note="Check #2 scratch must never land here"
+            />
+          </div>
+          {!payload.sync.connected && (
+            <p className="faint">
+              Either the phone is disconnected, or Syncthing could not be reached.
+              An unreachable Syncthing reports the same thing as a disconnected
+              phone — claiming a connection nothing verified would be worse.
+            </p>
+          )}
+          {payload.sync.state === 'unknown' && (
+            <p className="faint">
+              The collector could not read the Syncthing API key. Check that{' '}
+              <code>metrics-push.service</code> has{' '}
+              <code>ProtectHome=read-only</code> and not <code>true</code>.
+            </p>
+          )}
+          {payload.sync.connected && (payload.sync.global_files ?? 0) === 0 && (
+            <p className="faint">
+              The phone is connected but has announced no files — the card is
+              probably not being scanned. Check the folder on the phone.
+            </p>
+          )}
+        </HealthCard>
+      )}
+
+      {/* 3b. VM -> Telegram, the drain half.
+          Same optional-object guard: samples predating the drain have no
+          archive block at all. */}
       {payload.archive && payload.archive.total > 0 && (
         <HealthCard
-          title="Camera archive"
+          title="VM → Telegram (archive)"
           state={payload.archive.status === 'incomplete' ? 'amber' : 'green'}
         >
+          {/* The current step, in plain words. `status` alone cannot tell
+              hashing from uploading from the 20-minute Check #2 download, which
+              is what made the old single card hard to read. */}
+          {phaseLabel(payload.archive) && (
+            <StatRow label="Now" value={phaseLabel(payload.archive)} state="amber" />
+          )}
           <StatRow label="Files on the card" value={payload.archive.total.toLocaleString()} />
           <StatRow
             label="In Telegram"
@@ -292,12 +442,7 @@ export default function StatusPage() {
           )}
           {payload.archive.remaining > 0 && (payload.archive.bytes ?? 0) > 0 && payload.archive.done > 0 && (
             /* Remaining transfer time, from the average size actually archived
-               rather than a guess.
-               12 MB/s is the midpoint of the 10-16 MB/s measured on a DIRECT
-               Tailscale link (2026-09-15). It was 1.3 MB/s while the connection
-               relayed through DERP, so this estimate is ~10x shorter than it
-               used to be - if it ever reads wildly optimistic, check
-               `tailscale status` for "relay" rather than "direct". */
+               rather than a guess. Same 12 MB/s caveat as the card above. */
             <StatRow
               label="Est. transfer left"
               value={formatDuration(
@@ -307,6 +452,15 @@ export default function StatusPage() {
               )}
             />
           )}
+          <div className="mt-075">
+            <LimitMeter
+              label="Media volume"
+              used={payload.storage.block_used}
+              limit={payload.storage.block_total || LIMITS.blockVolumeBytes}
+              state={blockState}
+              note="Holds staging and the Check #2 round trip"
+            />
+          </div>
           <StatRow
             label="Drain state"
             value={payload.archive.status}
@@ -322,6 +476,12 @@ export default function StatusPage() {
             <p className="faint">
               {payload.archive.bytes_unknown} file(s) were archived before sizes
               were recorded, so the total above is a lower bound.
+            </p>
+          )}
+          {payload.archive.phase === 'downloading' && (
+            <p className="faint">
+              Check #2 downloads the whole channel back to verify this batch, so
+              this step takes longer as the archive grows.
             </p>
           )}
           {payload.archive.status === 'incomplete' && (

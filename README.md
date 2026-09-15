@@ -109,13 +109,24 @@ No developer account is needed. Nothing is submitted or reviewed.
 | Oracle block storage | 200 GB | 200 GB (50 boot + 150 block) | VPU tier is billable | Keep block volume at **0 VPU** |
 | Oracle egress | 10 TB/mo | < 50 GB | None | — |
 | Supabase Storage | 1 GB files, 5 GB/mo egress | < 1 GB | Low — no card on file | Soft limit refuses uploads at 90% |
-| Vercel Hobby | 100 GB transfer | < 1 GB | Very low — files bypass Vercel | Presigned URLs only |
-| Supabase | 500 MB Postgres | < 50 MB | Low | Metadata only, no blobs |
+| Vercel Hobby | 100 GB transfer, 1M function calls/mo | < 1 GB, ~43k calls | Very low — files bypass Vercel | Presigned URLs only |
+| Supabase | 500 MB Postgres | ~80 MB (78 of it metrics) | Low | 30-day retention, pruned nightly |
 | Oracle Object Storage | 10 GiB (Trial) / ~20 GB (Always Free) | < 8 GiB | Objects DELETED if over limit at trial end | Script refuses to back up past 85% |
 | Tailscale | 3 users / 100 devices | 1 / ~4 | None | — |
 | GitHub Actions | 2,000 min/mo | < 100 min | None | — |
 | healthchecks.io | 20 checks | 2 | None | — |
 | **Total** | | | | **$0.00/year** |
+
+**On the 1-minute metrics cadence** (2026-09-16): it adds no service and costs
+nothing, but it is the one line item that moved. The collector pushes 1,440×/day
+instead of 96×, which is **4.3%** of Vercel Hobby's 1M monthly function calls,
+and 30 days of samples is **78 MB** of the 500 MB Postgres tier — against
+`< 50 MB` for the whole database before. Two guards keep it there:
+`prune_metrics_samples()` retains 30 days, and
+`.github/workflows/prune-metrics.yml` actually calls it nightly. **Without that
+workflow retention is unbounded** — it was, until this date, and 90-day
+retention at this cadence would be 234 MB, nearly half the tier. Raising the
+cadence again means re-doing this arithmetic.
 
 **The single most expensive mistake available** is raising the block volume's VPU
 tier. VPUs bill separately from capacity at ~$0.0017 per VPU per GB-month;
@@ -153,7 +164,7 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
 | P5 | Presign API + auth | **Live and in use** - real file round-tripped, RLS verified |
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 140/140, PWA installable |
-| P7 | Collector + `/status` dashboard | **Done** — live metrics every 15 min, healthcheck green |
+| P7 | Collector + `/status` dashboard | **Done** — live metrics every 1 min, healthcheck green |
 | P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
 
 All four components are deployed and running. The remaining gate is **P3**: the

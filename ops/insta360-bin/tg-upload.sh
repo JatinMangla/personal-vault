@@ -25,6 +25,33 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }
 
+# Publish the current step for the dashboard.
+#
+# `status` in drain-state is only idle/running/complete/incomplete, so the 20
+# minutes Check #2 spends downloading the channel back are indistinguishable
+# from uploading. This script already LOGS all six transitions; writing them to
+# a file costs nothing and makes /status able to say which one is happening.
+#
+# Written to a .tmp then mv'd, the way tg-archive.sh's write_state does: mv
+# within a filesystem is atomic, so the collector - which reads this on its own
+# timer, every minute - can never catch a half-written file.
+#
+# Never fatal. The trailing `|| true` matters under `set -e` with an ERR trap:
+# a read-only or full WORK_DIR must not abort an upload that is otherwise fine.
+# Progress reporting is not worth losing a verified batch over.
+PHASE_FILE="$WORK_DIR/phase"
+
+write_phase() {
+  local phase="$1" file="${2:-}" index="${3:-0}" total="${4:-0}"
+  {
+    printf 'phase=%s\n' "$phase"
+    printf 'phase_file=%s\n' "$file"
+    printf 'phase_index=%s\n' "$index"
+    printf 'phase_total=%s\n' "$total"
+    printf 'phase_updated=%s\n' "$(date +%s)"
+  } > "$PHASE_FILE.tmp" 2>/dev/null && mv "$PHASE_FILE.tmp" "$PHASE_FILE" || true
+}
+
 hc() {
   local endpoint="${1:-}"
   [[ -n "${HEALTHCHECK_TGUPLOAD_UUID:-}" ]] || return 0
@@ -163,7 +190,23 @@ if (( avail_gb - roundtrip_gb < GUARD_MARGIN_GB )); then
   exit 1
 fi
 
+# Install the phase-clearing trap BEFORE the first write_phase, not beside the
+# round-trip directory a hundred lines below.
+#
+# Everything between here and there can exit: Check #1 rejecting a file, the
+# disk-margin guard, a flood-wait ceiling during upload. With the trap installed
+# only at the round trip, every one of those failures left the last phase
+# written - "uploading GS010042.insv" - on the dashboard forever, which is the
+# exact stale-phase failure this trap exists to prevent. rt_dir is unset until
+# later and the guard below tolerates that.
+cleanup() {
+  [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"
+  write_phase "" "" 0 0
+}
+trap cleanup EXIT
+
 log "Check #1 - verifying staged batch"
+write_phase hashing "" 0 "${#batch[@]}"
 "$HERE/verify-batch.sh" "$STAGING_DIR"
 
 upload_one() {
@@ -202,8 +245,11 @@ upload_one() {
   return 1
 }
 
+upload_index=0
 for f in "${batch[@]}"; do
+  upload_index=$(( upload_index + 1 ))
   log "uploading $(basename "$f") ($(numfmt --to=iec "$(stat -c %s "$f")"))"
+  write_phase uploading "$(basename "$f")" "$upload_index" "${#batch[@]}"
   upload_one "$f"
 done
 
@@ -214,6 +260,7 @@ upload_one "$manifest_copy" || err "manifest upload failed - not fatal"
 rm -f "$manifest_copy"
 
 log "Check #2 - downloading the channel back"
+write_phase downloading "" 0 "${#batch[@]}"
 
 # On the MEDIA volume, not WORK_DIR.
 #
@@ -249,10 +296,11 @@ if [[ "$rt_fs" == "$root_fs" ]]; then
   exit 1
 fi
 
+# rt_dir is now set, so the EXIT trap installed above starts removing it too.
+# The trap fires on success, on failure via the ERR trap's explicit exit, and on
+# SIGTERM from `systemctl stop`.
 rt_dir="$ROUNDTRIP_BASE/$$"
 mkdir -p "$rt_dir"
-cleanup() { [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"; }
-trap cleanup EXIT
 
 roundtrip_ok=1
 
@@ -271,6 +319,7 @@ if (( roundtrip_ok )); then
 
     joined="$rt_dir/$base"
     if (( ${#parts[@]} > 0 )); then
+      write_phase rejoining "$base" 0 "${#batch[@]}"
       mapfile -t sorted < <(
         for p in "${parts[@]}"; do printf '%s\t%s\n' "${p##*.}" "$p"; done | sort -n -k1,1 | cut -f2
       )
@@ -284,6 +333,7 @@ if (( roundtrip_ok )); then
       break
     fi
 
+    write_phase verifying "$base" 0 "${#batch[@]}"
     expected="$(awk -v want="$base" '{ n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n); if (n == want) { print $1; exit } }' "$MANIFEST")"
     actual="$(sha256sum "$joined" | cut -d' ' -f1)"
 
@@ -305,6 +355,7 @@ if (( ! roundtrip_ok )); then
 fi
 
 log "Check #2 passed for all ${#batch[@]} file(s) - clearing staging"
+write_phase clearing "" 0 "${#batch[@]}"
 
 # Record what is now in the archive, BEFORE deleting it.
 #

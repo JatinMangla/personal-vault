@@ -9,9 +9,13 @@ Type=oneshot
 User=root
 ExecStart=/opt/personal-vault/ops/metrics/collect-and-push.sh
 
-# Must finish well inside the 15-minute interval. If it cannot, the dashboard
+# Must finish well inside the 1-minute interval. If it cannot, the dashboard
 # staleness banner is the correct signal - not a pile of overlapping runs.
-TimeoutStartSec=5m
+#
+# The collector normally takes ~2 s. systemd will not start a second instance of
+# a oneshot that is still running, so an overrun degrades to "as often as it
+# can" rather than piling up.
+TimeoutStartSec=60s
 
 # Read-mostly: the collector must never mutate Immich, the database or the
 # restic repository.
@@ -19,7 +23,12 @@ Nice=15
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# read-only, NOT true. The Syncthing API key lives at
+# /home/ubuntu/.local/state/syncthing/config.xml, and ProtectHome=true hides it
+# entirely - the sync block would then report state "unknown" forever with no
+# error to explain why. Identical to the fix the restic job needed
+# (docs/HARD-WON.md). Still read-only: the collector must never write to $HOME.
+ProtectHome=read-only
 ReadWritePaths=/var/lib/personal-vault
 ProtectKernelTunables=true
 ProtectKernelModules=true

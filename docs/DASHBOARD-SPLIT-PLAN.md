@@ -1,8 +1,31 @@
 # Plan: split the Camera archive card, and make /status near-live
 
-**Status: planned, not started.** Written 2026-09-16. Read
+**Status: BUILT 2026-09-16, not yet deployed.** Written 2026-09-16. Read
 `docs/SESSION-HANDOVER.md` and `docs/HARD-WON.md` first — this plan assumes the
 decisions and traps recorded there.
+
+All four parts are implemented and the local gates pass: `bash -n` on the three
+scripts, typecheck, 59 tests (13 new), build, bundle scan. **Nothing is live** —
+the VM steps and the Vercel redeploy under "Verification" below have not been
+run, and `SUPABASE_SERVICE_ROLE_KEY` is not yet a repository secret.
+
+| Part | Files |
+|---|---|
+| 1 — sync collection | `ops/metrics/collect-and-push.sh`, `ops/systemd/metrics-push.service` |
+| 2 — phase markers | `ops/insta360-bin/tg-upload.sh`, `ops/insta360-bin/tg-archive.sh` |
+| 3 — two cards | `vault/app/status/page.tsx`, `vault/lib/supabase-types.ts` |
+| 4 — cadence, retention | `ops/systemd/metrics-push.timer`, `vault/lib/thresholds.ts`, `vault/supabase/migrations/0003_metrics_retention_30_days.sql`, `.github/workflows/prune-metrics.yml` |
+
+Two notes from building it:
+
+- **`vault/app/api/metrics/ingest/route.ts` needed no change.** It validates
+  only that `storage` and `system` exist and stores the payload whole, so
+  unknown fields already pass through. Part 3's item 4 was conditional and the
+  condition did not hold.
+- **The phase file is cleared by the `EXIT` trap**, so `phase` is an empty
+  string between batches rather than absent. The dashboard must treat `''` and
+  `undefined` identically — `phaseLabel()` uses a truthiness check, not a
+  comparison against `undefined`, and there is a test for the empty case.
 
 ## Context
 

@@ -26,7 +26,7 @@ ops/
 │   ├── restore-test.sh      The P3 gate. Proves the backup actually restores.
 │   └── video-sync.sh        Monthly pull to a home external drive.
 ├── metrics/
-│   └── collect-and-push.sh  Every 15 min, outbound push to Vercel.
+│   └── collect-and-push.sh  Every 1 min, outbound push to Vercel.
 ├── monitoring/
 │   └── healthcheck-setup.md Dead-man's switch configuration.
 ├── systemd/                 Two services and two timers.
@@ -134,17 +134,46 @@ See `monitoring/healthcheck-setup.md`.
 
 ## Metrics collection
 
-`collect-and-push.sh` runs every 15 minutes and POSTs **outbound** to the Vercel
+`collect-and-push.sh` runs every minute and POSTs **outbound** to the Vercel
 ingest endpoint. The Oracle box has no inbound ports and keeps it that way, so
-the dashboard can never query it — the box pushes instead.
+the dashboard can never query it — the box pushes instead. That is also the
+ceiling on freshness: `/status` is near-live, never realtime, because Vercel
+cannot reach the VM even over Tailscale.
 
 Authentication is HMAC-SHA256 over the exact JSON body, with a timestamp inside
 the signed payload; the server rejects anything older than 5 minutes to prevent
 replay.
 
 The collector reads backup state from files written by the nightly job rather
-than invoking restic itself. A 15-minute timer must be fast and must not contend
+than invoking restic itself. A 1-minute timer must be fast and must not contend
 for the repository lock.
+
+**Three things move together** and changing one alone breaks the dashboard:
+
+| | |
+|---|---|
+| `systemd/metrics-push.timer` | `OnUnitActiveSec=1min`, and `AccuracySec=1s` or arrivals are erratic |
+| `vault/lib/thresholds.ts` | `stalenessState()` — amber 5 min, red 15 min |
+| `.github/workflows/prune-metrics.yml` | nightly, or 1-minute samples fill the 500 MB Supabase tier in ~2 years |
+
+The collector also reports **Syncthing** (`sync` block: folder state, bytes and
+files still to arrive, whether the phone is connected) and the drain's current
+**phase**, which is what lets `/status` show two separate cards for card → VM
+and VM → Telegram. Reading the Syncthing API key needs
+`ProtectHome=read-only` in `metrics-push.service`; under `ProtectHome=true` the
+key is invisible and the block reports `state: "unknown"` with no error.
+
+### Retention
+
+`metrics_samples` keeps **30 days**, pruned nightly by
+`.github/workflows/prune-metrics.yml`, which calls `prune_metrics_samples()`
+with the **service-role** key — the function is `security definer` and revoked
+from public, so the anon key silently deletes nothing.
+
+Until 2026-09-16 no such workflow existed and retention was unbounded: the
+function had never been called once. Invisible at one sample per 15 minutes;
+~245 MB/year at one per minute, against a 500 MB tier shared with the vault's
+own tables.
 
 **On Immich's storage endpoint:** it reports the whole underlying disk rather
 than Immich's own consumption. The collector computes the real breakdown with

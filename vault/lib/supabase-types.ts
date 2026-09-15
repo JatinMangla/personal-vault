@@ -63,12 +63,46 @@ export interface MetricsPayload {
     staging_bytes?: number;
   };
   /**
+   * Syncthing, the phone -> VM half of the archive pipeline.
+   *
+   * Optional: the collector did not query Syncthing at all before 2026-09-16,
+   * so every sample older than that lacks the whole object — not merely a
+   * field. Guard with `payload.sync?` and coalesce each number.
+   */
+  sync?: {
+    /** Syncthing's own folder state: idle, scanning, syncing, error, unknown. */
+    state: string;
+    /** Bytes the VM still expects to receive for this transfer. */
+    need_bytes: number;
+    need_files: number;
+    /** Files the phone has announced, and files the VM actually holds. */
+    global_files: number;
+    local_files: number;
+    /**
+     * Whether the phone is connected right now. False also means "Syncthing
+     * could not be reached" — unknown is reported as disconnected rather than
+     * claiming a connection nothing verified.
+     */
+    connected: boolean;
+  };
+  /**
    * Insta360 card -> Telegram drain progress, from tg-archive's state file.
    * Optional for the same reason as staging_bytes: older samples predate it,
    * and the collector reports `idle` when no drain has ever run.
    */
   archive?: {
     status: 'idle' | 'running' | 'complete' | 'incomplete';
+    /**
+     * Which step of the current batch is running. `status` cannot distinguish
+     * hashing from uploading from the 20-minute Check #2 download; this can.
+     * Empty string between batches, and absent on samples predating it.
+     */
+    phase?: 'hashing' | 'uploading' | 'downloading' | 'rejoining' | 'verifying' | 'clearing' | '';
+    /** The file the current phase is working on, when it applies to one. */
+    phase_file?: string;
+    /** Position within the batch, e.g. uploading 3 of 8. 0 when not applicable. */
+    phase_index?: number;
+    phase_total?: number;
     /** Files fingerprinted in the manifest. */
     total: number;
     /** Verified into Telegram. */

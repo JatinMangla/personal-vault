@@ -119,12 +119,19 @@ export function restoreDrillState(lastDrillMs: number, now: number = Date.now())
  * A dashboard that looks green because it is frozen is worse than no dashboard.
  * If the collector stops, this drives a loud red banner rather than letting
  * stale numbers sit there looking fine.
+ *
+ * Tuned to the collector's interval, which is 1 minute
+ * (ops/systemd/metrics-push.timer). Amber at 5 minutes is five missed pushes;
+ * red at 15 is unambiguous. The previous 30 min / 2 h were sized for a
+ * 15-minute timer and would now hide a collector that died half an hour ago -
+ * exactly the silent-green failure this function exists to prevent. Changing
+ * the timer means changing these two numbers.
  */
 export function stalenessState(lastSampleMs: number, now: number = Date.now()): HealthState {
   if (!lastSampleMs) return 'red';
   const age = now - lastSampleMs;
-  if (age > 2 * HOUR) return 'red';
-  if (age > 30 * 60 * 1000) return 'amber';
+  if (age > 15 * 60 * 1000) return 'red';
+  if (age > 5 * 60 * 1000) return 'amber';
   return 'green';
 }
 

@@ -75,6 +75,30 @@ err() { echo "[$(date -Is)] ERROR: $*" >&2; }
 # should have to know the other exists.
 STATE_FILE="$WORK_DIR/drain-state"
 
+# tg-upload.sh writes the step it is on here; this loop folds it into
+# drain-state so the collector has one file to read rather than two.
+PHASE_FILE="$WORK_DIR/phase"
+
+# Read as key=value, never sourced - another process writes this file, and
+# sourcing it would execute whatever it contained. Same rule the collector
+# follows for drain-state.
+read_phase() {
+  PHASE=""
+  PHASE_NAME_FILE=""
+  PHASE_INDEX=0
+  PHASE_TOTAL=0
+  [[ -r "$PHASE_FILE" ]] || return 0
+  local k v
+  while IFS='=' read -r k v; do
+    case "$k" in
+      phase)       PHASE="$v" ;;
+      phase_file)  PHASE_NAME_FILE="$v" ;;
+      phase_index) PHASE_INDEX="$v" ;;
+      phase_total) PHASE_TOTAL="$v" ;;
+    esac
+  done < "$PHASE_FILE"
+}
+
 write_state() {
   local status="$1" total_n done_n remaining_n
   total_n=$(manifest_names | sort -u | wc -l)
@@ -84,6 +108,8 @@ write_state() {
 
   local bytes_n unknown_n
   read -r bytes_n unknown_n < <(uploaded_bytes)
+
+  read_phase
 
   # Written atomically. The collector may read this at any moment, and a
   # half-written file would surface as a wrong number on the dashboard.
@@ -95,6 +121,10 @@ write_state() {
     printf 'bytes=%s\n' "${bytes_n:-0}"
     printf 'bytes_unknown=%s\n' "${unknown_n:-0}"
     printf 'updated=%s\n' "$(date +%s)"
+    printf 'phase=%s\n' "${PHASE:-}"
+    printf 'phase_file=%s\n' "${PHASE_NAME_FILE:-}"
+    printf 'phase_index=%s\n' "${PHASE_INDEX:-0}"
+    printf 'phase_total=%s\n' "${PHASE_TOTAL:-0}"
   } > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 }
 

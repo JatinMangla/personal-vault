@@ -2,7 +2,7 @@
 #
 # Metrics collector — Component D.
 #
-# Runs every 15 minutes on a systemd timer, gathers local metrics, and POSTs
+# Runs every minute on a systemd timer, gathers local metrics, and POSTs
 # them OUTBOUND to the Vercel ingest endpoint.
 #
 # WHY PUSH, NEVER PULL. The Oracle box has no inbound ports and must keep it
@@ -30,6 +30,14 @@ set -a; source "$ENV_FILE"; set +a
 MEDIA_DIR="${UPLOAD_LOCATION:-/mnt/media}"
 STATE_DIR="${STATE_DIR:-/var/lib/personal-vault}"
 IMMICH_URL="${IMMICH_BASE_URL:-http://127.0.0.1:2283}"
+
+# Syncthing, for the card -> VM half of the archive pipeline. Defaults match
+# ops/insta360-bin/tg-go.sh; the folder id changes if the phone folder is ever
+# recreated, which mints a new one (docs/HARD-WON.md).
+SYNCTHING_CONFIG="${SYNCTHING_CONFIG:-/home/ubuntu/.local/state/syncthing/config.xml}"
+SYNCTHING_URL="${SYNCTHING_URL:-http://127.0.0.1:8384}"
+SYNC_FOLDER="${SYNC_FOLDER:-dub20-7j8sw}"
+SYNC_DEVICE="${SYNC_DEVICE:-OJKKRMK-ZT2LZBV-E7PJ7WF-X4KQNPT-XKVYLXV-5IQY26R-6T3S5ZF-HAAHYAA}"
 
 for required in METRICS_INGEST_URL METRICS_INGEST_SECRET; do
   if [[ -z "${!required:-}" ]]; then
@@ -86,6 +94,91 @@ df_line() {
 
 json_num() { [[ -n "${1:-}" ]] && echo "$1" || echo 0; }
 
+# --- Syncthing ------------------------------------------------------------
+#
+# The card -> VM half of the archive. Every call here is best-effort: a
+# collector that dies because Syncthing is stopped takes the WHOLE dashboard
+# down, including the storage and backup figures that were working. Each helper
+# returns empty on any failure and the caller substitutes zeros.
+#
+# Reading the key needs ProtectHome=read-only in metrics-push.service. Under
+# ProtectHome=true the config file is invisible and sync_state stays "unknown" -
+# the same wall the restic job hit (docs/HARD-WON.md).
+
+sync_key() {
+  [[ -r "$SYNCTHING_CONFIG" ]] || return 0
+  grep -o '<apikey>[^<]*</apikey>' "$SYNCTHING_CONFIG" 2>/dev/null |
+    sed 's/<[^>]*>//g' | head -1
+}
+
+# "state needBytes needFiles globalFiles localFiles", or empty.
+#
+# Parsed in python rather than grep: the API pretty-prints with a space after
+# the colon, so `grep -o '"state":[a-z]*'` returns the key and nothing else.
+# That exact truncation already cost this project two debugging sessions.
+sync_folder_status() {
+  local k="$1"
+  [[ -n "$k" ]] || return 0
+  curl -s -m 5 -H "X-API-Key: $k" \
+    "$SYNCTHING_URL/rest/db/status?folder=$SYNC_FOLDER" 2>/dev/null |
+    python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print(d.get("state","unknown"), int(d.get("needBytes",0) or 0),
+      int(d.get("needFiles",0) or 0), int(d.get("globalFiles",0) or 0),
+      int(d.get("localFiles",0) or 0))
+' 2>/dev/null || true
+}
+
+# "true" / "false" for the phone. Empty when Syncthing cannot be reached, which
+# the caller renders as false - unknown and disconnected look the same from the
+# dashboard, and claiming "connected" without evidence is the worse error.
+sync_connected() {
+  local k="$1"
+  [[ -n "$k" ]] || return 0
+  curl -s -m 5 -H "X-API-Key: $k" \
+    "$SYNCTHING_URL/rest/system/connections" 2>/dev/null |
+    python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+dev = d.get("connections",{}).get(sys.argv[1],{})
+print("true" if dev.get("connected") else "false")
+' "$SYNC_DEVICE" 2>/dev/null || true
+}
+
+SYNC_STATE="unknown"
+SYNC_NEED_BYTES=0
+SYNC_NEED_FILES=0
+SYNC_GLOBAL_FILES=0
+SYNC_LOCAL_FILES=0
+SYNC_CONNECTED=false
+
+_sync_key="$(sync_key)"
+if [[ -n "$_sync_key" ]]; then
+  _sync_line="$(sync_folder_status "$_sync_key")"
+  if [[ -n "$_sync_line" ]]; then
+    read -r _st _nb _nf _gf _lf <<< "$_sync_line"
+    # Validate every field before it reaches the payload. A non-numeric value
+    # interpolated into JSON produces a body that parses as invalid on the
+    # server and fails the push with a 400 - losing the storage and backup
+    # figures too, for a number nobody needed.
+    [[ -n "$_st" ]] && SYNC_STATE="$_st"
+    [[ "$_nb" =~ ^[0-9]+$ ]] && SYNC_NEED_BYTES="$_nb"
+    [[ "$_nf" =~ ^[0-9]+$ ]] && SYNC_NEED_FILES="$_nf"
+    [[ "$_gf" =~ ^[0-9]+$ ]] && SYNC_GLOBAL_FILES="$_gf"
+    [[ "$_lf" =~ ^[0-9]+$ ]] && SYNC_LOCAL_FILES="$_lf"
+  fi
+
+  _sync_conn="$(sync_connected "$_sync_key")"
+  [[ "$_sync_conn" == "true" ]] && SYNC_CONNECTED=true
+fi
+
 # --- Storage --------------------------------------------------------------
 
 # Block volume (media). df -B1 gives bytes.
@@ -128,6 +221,13 @@ DRAIN_REMAINING=0
 DRAIN_BYTES=0
 DRAIN_BYTES_UNKNOWN=0
 DRAIN_UPDATED=0
+# Which step of a batch is running right now. `status` only distinguishes
+# idle/running/complete/incomplete, so a drain that spends 20 minutes in Check
+# #2 looks identical to one uploading. Absent until tg-upload.sh writes one.
+DRAIN_PHASE=""
+DRAIN_PHASE_FILE=""
+DRAIN_PHASE_INDEX=0
+DRAIN_PHASE_TOTAL=0
 if [[ -r "$DRAIN_STATE" ]]; then
   # Read as key=value rather than sourcing it: this file is written by another
   # process, and sourcing would execute whatever it contains.
@@ -140,9 +240,22 @@ if [[ -r "$DRAIN_STATE" ]]; then
       bytes)         DRAIN_BYTES="$v" ;;
       bytes_unknown) DRAIN_BYTES_UNKNOWN="$v" ;;
       updated)       DRAIN_UPDATED="$v" ;;
+      phase)         DRAIN_PHASE="$v" ;;
+      phase_file)    DRAIN_PHASE_FILE="$v" ;;
+      phase_index)   DRAIN_PHASE_INDEX="$v" ;;
+      phase_total)   DRAIN_PHASE_TOTAL="$v" ;;
     esac
   done < "$DRAIN_STATE"
 fi
+
+# A filename reaches the payload as a JSON string, and `.insv` names come from
+# the camera rather than from us. Strip the two characters that would break the
+# body - a stray quote or backslash makes the whole push fail with a 400 and
+# takes every other figure with it.
+DRAIN_PHASE_FILE="${DRAIN_PHASE_FILE//\\/}"
+DRAIN_PHASE_FILE="${DRAIN_PHASE_FILE//\"/}"
+[[ "$DRAIN_PHASE_INDEX" =~ ^[0-9]+$ ]] || DRAIN_PHASE_INDEX=0
+[[ "$DRAIN_PHASE_TOTAL" =~ ^[0-9]+$ ]] || DRAIN_PHASE_TOTAL=0
 ORIGINALS_BYTES=$((UPLOAD_BYTES + LIBRARY_BYTES))
 
 # --- Immich statistics ----------------------------------------------------
@@ -268,8 +381,20 @@ read -r -d '' PAYLOAD <<JSON || true
     "staging_bytes": ${STAGING_BYTES:-0},
     "backups_bytes": ${BACKUPS_BYTES:-0}
   },
+  "sync": {
+    "state": "${SYNC_STATE}",
+    "need_bytes": ${SYNC_NEED_BYTES:-0},
+    "need_files": ${SYNC_NEED_FILES:-0},
+    "global_files": ${SYNC_GLOBAL_FILES:-0},
+    "local_files": ${SYNC_LOCAL_FILES:-0},
+    "connected": ${SYNC_CONNECTED}
+  },
   "archive": {
     "status": "${DRAIN_STATUS}",
+    "phase": "${DRAIN_PHASE}",
+    "phase_file": "${DRAIN_PHASE_FILE}",
+    "phase_index": $(json_num "$DRAIN_PHASE_INDEX"),
+    "phase_total": $(json_num "$DRAIN_PHASE_TOTAL"),
     "total": $(json_num "$DRAIN_TOTAL"),
     "done": $(json_num "$DRAIN_DONE"),
     "remaining": $(json_num "$DRAIN_REMAINING"),

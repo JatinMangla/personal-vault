@@ -1,0 +1,85 @@
+name: prune-metrics
+
+# Delete metrics samples older than 30 days.
+#
+# public.prune_metrics_samples() has existed since the initial schema, and its
+# comment said "Invoked by the nightly GitHub Action" — but no such Action was
+# ever written. Retention was unbounded: the function was never called once.
+#
+# Invisible at one sample per 15 minutes (~8,600 rows/year). At one per minute
+# it is ~245 MB/year against a 500 MB free tier shared with the vault's files
+# and user_keys tables, so this is now load-bearing rather than tidy.
+
+on:
+  schedule:
+    # 03:30 UTC (09:00 IST) daily — well away from the 05:00 keepalive, so a
+    # slow run of one cannot delay the other.
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Delete samples older than 30 days
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # The SERVICE ROLE key, not the anon key. prune_metrics_samples is
+          # `security definer` with `revoke all ... from public`, so an
+          # anonymous caller gets 401/404 and the rows are never deleted —
+          # which would look exactly like a workflow that ran fine.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY repository secrets are not set."
+            echo "Add them in Settings > Secrets and variables > Actions."
+            echo "Without them retention does not run and metrics_samples grows"
+            echo "until it consumes the 500 MB Supabase free tier."
+            exit 1
+          fi
+
+          # Capture body and status separately: a 404 or 401 returns a JSON
+          # error document, and treating that as a row count would report
+          # success for a prune that deleted nothing.
+          response=$(curl -sS -w '\n%{http_code}' \
+            -X POST \
+            -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            "${SUPABASE_URL}/rest/v1/rpc/prune_metrics_samples")
+
+          status=$(printf '%s' "$response" | tail -n1)
+          body=$(printf '%s' "$response" | sed '$d')
+
+          echo "HTTP $status"
+
+          case "$status" in
+            2*)
+              echo "Deleted $body row(s) older than 30 days."
+              ;;
+            401|403)
+              echo "Rejected: $body"
+              echo "The function is security definer and revoked from public —"
+              echo "check that SUPABASE_SERVICE_ROLE_KEY holds the service role"
+              echo "key and not the anon key."
+              exit 1
+              ;;
+            404)
+              echo "Rejected: $body"
+              echo "prune_metrics_samples() was not found. Has migration"
+              echo "0003_metrics_retention_30_days.sql been applied?"
+              exit 1
+              ;;
+            *)
+              echo "Unexpected status $status: $body"
+              exit 1
+              ;;
+          esac
