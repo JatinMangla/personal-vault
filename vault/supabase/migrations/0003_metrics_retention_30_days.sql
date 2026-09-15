@@ -13,9 +13,16 @@
 -- days, so nothing on /status loses history it was using.
 --
 -- 0001_initial_schema.sql is already applied and must not be edited. This
--- redefines the function in place; `create or replace` keeps the existing
--- grants, so the `revoke all ... from public` there still stands and the
--- function remains callable only with the service-role key.
+-- redefines the function in place; `create or replace` keeps whatever grants
+-- the function already had.
+--
+-- CORRECTION (2026-09-16): an earlier version of this comment claimed the
+-- `revoke all ... from public` in 0001 "still stands, so the function remains
+-- callable only with the service-role key". That was wrong. Reading the live
+-- ACL afterwards showed anon and authenticated both holding EXECUTE, because
+-- `revoke ... from public` does not remove grants held by named roles and
+-- Supabase grants execute to those two by name. See
+-- 0004_revoke_prune_metrics_from_public_roles.sql, which fixes it.
 
 create or replace function public.prune_metrics_samples()
 returns integer
