@@ -17,7 +17,10 @@ TG_CHANNEL="${TG_CHANNEL:?TG_CHANNEL not set}"
 TG_CONFIG="${TG_CONFIG:-/var/lib/insta360-archive/telegram-upload.json}"
 GUARD_MARGIN_GB="${GUARD_MARGIN_GB:-10}"
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f first, so a symlinked install still finds verify-batch.sh beside
+# the real script rather than beside the link. Same bug as tg-archive hit when
+# run through /usr/local/bin.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }

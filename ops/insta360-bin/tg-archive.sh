@@ -43,7 +43,11 @@ STAGING_DIR="${STAGING_DIR:?STAGING_DIR not set}"
 MANIFEST="${MANIFEST:?MANIFEST not set}"
 WORK_DIR="${WORK_DIR:-/var/lib/insta360-archive/work}"
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f FIRST. Installed as /usr/local/bin/tg-archive -> the real script,
+# dirname of BASH_SOURCE gives /usr/local/bin, and the sibling lookup below
+# then hunts for /usr/local/bin/tg-upload.sh, which does not exist. Resolving
+# the symlink puts HERE in the directory that actually holds the scripts.
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 UPLOADER="$HERE/tg-upload.sh"
 
 # State lives beside the work directory, not in /tmp: a reboot must not look
@@ -230,7 +234,29 @@ cmd_start() {
     err "flock unavailable - relying on tg-upload.sh's own session lock"
   fi
 
-  [[ -x "$UPLOADER" ]] || { err "not executable: $UPLOADER"; exit 1; }
+  # Fall back to the install path before giving up. Symlink resolution above
+  # handles the normal case, but if readlink is missing or the layout changes,
+  # a bare "not executable" naming a path the operator never typed is a
+  # confusing way to fail - it sent one real session hunting the wrong problem.
+  if [[ ! -x "$UPLOADER" ]]; then
+    for candidate in \
+      "${TG_UPLOADER:-}" \
+      /opt/insta360-archive/bin/tg-upload.sh
+    do
+      [[ -n "$candidate" && -x "$candidate" ]] || continue
+      log "using uploader at $candidate"
+      UPLOADER="$candidate"
+      break
+    done
+  fi
+
+  if [[ ! -x "$UPLOADER" ]]; then
+    err "cannot find an executable tg-upload.sh"
+    err "  looked beside this script: $HERE/tg-upload.sh"
+    err "  and at: /opt/insta360-archive/bin/tg-upload.sh"
+    err "set TG_UPLOADER=/path/to/tg-upload.sh to override"
+    exit 1
+  fi
 
   log "draining - staging: $STAGING_DIR"
   log "pause any time with: tg-archive pause"
