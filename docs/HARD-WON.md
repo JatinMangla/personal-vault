@@ -357,6 +357,10 @@ speed suggests. **Size batches at 10–20GB**, one charge each.
 [13:49:06] removed VID_20250219_155539_00_032.insv
 ```
 
+(That run predates 2026-09-15's change from deleting to moving. `--apply` now
+relocates archived files to a `tg-archived/` sibling; `--apply --delete` is the
+opt-in that still removes them.)
+
 Two bugs surfaced on the way, both worth keeping in mind:
 
 **The ledger was empty for a file that was demonstrably archived.** Only

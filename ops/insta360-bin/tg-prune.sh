@@ -16,10 +16,19 @@
 #   tg-prune              show what would be removed, remove nothing
 #   tg-prune --apply      actually remove them
 #
-# SAFETY. This only ever deletes from tg-batch, which holds COPIES. Your
-# originals live wherever you copied them from and are never touched. Even so
-# it refuses to run unless the directory looks like a batch folder, and
-# --apply is required for anything to be deleted.
+# SAFETY. --apply MOVES archived files out of tg-batch into a sibling folder
+# (tg-archived) rather than deleting them. Syncthing syncs tg-batch only, so
+# moving a file out stops it being sent just as effectively as deleting it -
+# and nothing is ever destroyed.
+#
+# This matters because tg-batch does not necessarily hold copies. An earlier
+# version of this comment asserted that it did, and built the delete on that
+# assumption. If files are MOVED into tg-batch rather than copied, they are the
+# only originals, and a delete would be unrecoverable. Moving is correct either
+# way, so the script does not need to know which.
+#
+# `--delete` still deletes, for when you are certain copies exist elsewhere.
+# It refuses to run against any directory not named tg-batch.
 
 set -euo pipefail
 
@@ -32,12 +41,20 @@ VM_LEDGER="${VM_LEDGER:-/var/lib/insta360-archive/work/uploaded.sha256}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/immich_phone}"
 
 APPLY=0
-[[ "${1:-}" == "--apply" ]] && APPLY=1
-[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && {
-  echo "tg-prune            dry run - show what is already archived"
-  echo "tg-prune --apply    remove those files from tg-batch"
-  exit 0
-}
+DELETE=0
+for arg in "$@"; do
+  case "$arg" in
+    --apply)  APPLY=1 ;;
+    --delete) DELETE=1 ;;
+    -h|--help)
+      echo "tg-prune                    dry run - show what is already archived"
+      echo "tg-prune --apply            MOVE archived files to ../tg-archived"
+      echo "tg-prune --apply --delete   delete them instead (only if copies exist)"
+      exit 0
+      ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 err() { echo "[$(date +%H:%M:%S)] ERROR: $*" >&2; }
@@ -183,19 +200,56 @@ mins=$(( bytes / 1300000 / 60 ))
 echo
 log "pruning would save ${mb} MB of transfer (~${mins} min at 1.3 MB/s)"
 
+DONE_DIR="$(dirname "$BATCH_DIR")/tg-archived"
+
 if (( ! APPLY )); then
   echo
-  log "DRY RUN - nothing removed. These are already in Telegram:"
+  log "DRY RUN - nothing moved. These are already in Telegram:"
   for f in "${archived[@]}"; do echo "    $(basename "$f")"; done
   echo
-  log "run 'tg-prune --apply' to remove them"
+  if (( DELETE )); then
+    log "run 'tg-prune --apply --delete' to DELETE them"
+    log "  only do this if you are certain copies exist elsewhere"
+  else
+    log "run 'tg-prune --apply' to move them to $DONE_DIR"
+  fi
   exit 0
 fi
 
 echo
-for f in "${archived[@]}"; do
-  rm -f "$f" && log "removed $(basename "$f")"
-done
 
-log "done - ${#fresh[@]} file(s) left to sync"
-log "these are COPIES; your originals were never touched"
+if (( DELETE )); then
+  for f in "${archived[@]}"; do
+    rm -f "$f" && log "deleted $(basename "$f")"
+  done
+  log "done - ${#fresh[@]} file(s) left to sync"
+  log "DELETED from the card. Recoverable only from Telegram."
+else
+  # Out of tg-batch, not out of existence. Syncthing watches tg-batch alone, so
+  # a sibling directory is invisible to it - the transfer stops either way, and
+  # the footage is still on the card if the archive ever has to be questioned.
+  if ! mkdir -p "$DONE_DIR" 2>/dev/null; then
+    err "cannot create $DONE_DIR - nothing was moved"
+    err "the card may be read-only, or full"
+    exit 1
+  fi
+
+  moved=0
+  for f in "${archived[@]}"; do
+    base="$(basename "$f")"
+    if [[ -e "$DONE_DIR/$base" ]]; then
+      err "already in tg-archived, leaving in place: $base"
+      continue
+    fi
+    if mv "$f" "$DONE_DIR/"; then
+      log "moved $base"
+      moved=$(( moved + 1 ))
+    else
+      err "could not move $base - left where it is"
+    fi
+  done
+
+  log "done - moved $moved file(s) to $DONE_DIR"
+  log "${#fresh[@]} file(s) left in tg-batch to sync"
+  log "NOTHING WAS DELETED - the footage is still on the card"
+fi

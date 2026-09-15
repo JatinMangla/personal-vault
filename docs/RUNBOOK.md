@@ -238,12 +238,12 @@ Run this in Termux **before connecting the card**:
 
 ```bash
 tg-prune            # dry run - what is already archived
-tg-prune --apply    # remove those from tg-batch
+tg-prune --apply    # move those to ../tg-archived (nothing deleted)
 ```
 
 It fetches the VM's ledger over Tailscale (a few KB), compares it against
-`tg-batch`, and deletes files already in the archive so Syncthing never sends
-them again. It prints how much transfer it saved.
+`tg-batch`, and moves files already in the archive into `tg-archived/` so
+Syncthing never sends them again. It prints how much transfer it saved.
 
 **This is where the real saving is.** The VM-side check below prevents a
 duplicate reaching Telegram, but by then the file has already crossed the cable
@@ -253,9 +253,18 @@ sending the same data — so checking always costs less than transferring.
 
 It compares by name first and only hashes when a name matches, so a reused
 filename with new footage is kept, not mistaken for an upload that already
-happened. It only ever deletes from `tg-batch`, which holds copies; it refuses
-to run against any other directory, and `--apply` is required before anything
-is removed.
+happened.
+
+**`--apply` moves files, it does not delete them.** Archived files go to
+`tg-archived/`, a sibling of `tg-batch`. Syncthing watches `tg-batch` alone, so
+moving a file out stops it being sent just as effectively as deleting it —
+without destroying anything.
+
+That matters if you **move** footage into `tg-batch` rather than copying it: the
+files there would be your only originals. Moving is safe either way, so the
+script does not need to know which you did. `--apply --delete` still deletes,
+for when you are certain copies exist elsewhere. It refuses to run against any
+directory not named `tg-batch`.
 
 ### Re-syncing the same file does not re-upload it
 
@@ -279,6 +288,30 @@ ERROR: VID_001.insv is recorded as archived but the content differs - uploading 
 So you can leave files in `tg-batch` and add new ones alongside them. Only the
 new ones cost bandwidth. Clearing the phone folder is a tidiness choice, not a
 requirement.
+
+### What guarantees a file uploaded correctly
+
+Nothing leaves staging until the file has made the full round trip and matched
+byte for byte. In order, every batch:
+
+1. **Check #1** — every staged file is hashed and compared against the manifest.
+   A file not in the manifest, or whose hash differs, **fails the batch**.
+2. **Upload** to Telegram, retrying on flood-wait.
+3. **Check #2** — the channel is downloaded back, split parts rejoined in
+   numeric order, and each file's SHA-256 compared to the manifest again.
+4. **Only then** is staging cleared and the file recorded in `uploaded.sha256`.
+
+A single flipped bit anywhere in that path changes the hash, fails Check #2,
+leaves staging untouched and prints `ROUND-TRIP MISMATCH`. There is no quality
+loss to worry about: `telegram-upload` sends the file as a document, not as
+media, so Telegram never re-encodes it. The bytes that come back are the bytes
+that went out, or the check fails.
+
+**What this does not prove:** that the copy in `tg-batch` on the card was
+identical to what reached staging. That leg is Syncthing's, which hashes every
+block it transfers — solid, but not a checksum you control. This is why
+`tg-prune --apply` **moves** rather than deletes by default: it costs nothing
+to keep the card copy until you have decided the archive is trustworthy.
 
 ### ⚠️ Back up the ledger — it is the only record of what is archived
 
