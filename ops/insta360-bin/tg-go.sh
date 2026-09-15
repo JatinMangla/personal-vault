@@ -239,7 +239,27 @@ fi
 
 step "4/4  updating the dashboard"
 if [[ -x "$COLLECTOR" ]]; then
-  "$COLLECTOR" >/dev/null 2>&1 && log "metrics pushed" || err "metrics push failed (not fatal)"
+  # Capture the reason rather than discarding it. '>/dev/null 2>&1' here threw
+  # away the one line that said WHY, leaving "metrics push failed" and nothing
+  # to act on - the failure is not fatal, but it should never be mute.
+  collector_out="$("$COLLECTOR" 2>&1)" && collector_rc=0 || collector_rc=$?
+
+  if (( collector_rc == 0 )); then
+    log "metrics pushed"
+  else
+    err "metrics push failed (not fatal - the 15-minute timer will retry)"
+    printf '%s\n' "$collector_out" | tail -3 | sed 's/^/           /' >&2
+
+    # The likeliest cause by far, and it has bitten this project before: the
+    # collector reads /etc/personal-vault/ops.env, tg-go runs as the ubuntu
+    # user, and that file is installed 0600 root:root. tg-archive.env needed
+    # exactly this fix on the first real run.
+    if [[ -e /etc/personal-vault/ops.env && ! -r /etc/personal-vault/ops.env ]]; then
+      err "ops.env is not readable by $(id -un) - that is almost certainly why:"
+      err "  sudo chown root:ubuntu /etc/personal-vault/ops.env"
+      err "  sudo chmod 640 /etc/personal-vault/ops.env"
+    fi
+  fi
 else
   err "collector not found at $COLLECTOR - dashboard will lag until its timer runs"
 fi
