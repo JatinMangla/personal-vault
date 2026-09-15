@@ -6,12 +6,14 @@
 # Syncthing never transfers them again.
 #
 # WHY THIS EXISTS. tg-upload.sh already refuses to upload a duplicate, but by
-# then the file has crossed the cable: ~1.3 MB/s over OTG, with the phone
-# tethered and the battery draining at 1% per 3.3 minutes. Skipping at the VM
-# saves Telegram bandwidth; skipping HERE saves the expensive half.
+# then the file has crossed the link, with the phone tethered and the battery
+# draining at 1% per 3.3 minutes. Skipping at the VM saves Telegram bandwidth;
+# skipping HERE saves the transfer as well.
 #
-# Hashing locally reads at roughly 3.7 GB/min, about 170x faster than sending
-# the same bytes. So checking is always cheaper than transferring.
+# Hashing locally reads at roughly 3.7 GB/min, several times faster than
+# sending the same bytes even on a direct link. So checking still costs less
+# than transferring - though by a smaller margin than when the connection
+# relayed at 1.3 MB/s, which is when this script was written.
 #
 #   tg-prune              show what would be removed, remove nothing
 #   tg-prune --apply      actually remove them
@@ -196,11 +198,25 @@ for f in "${archived[@]}"; do
   sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
   bytes=$(( bytes + sz ))
 done
+# Midpoint of the 10-16 MB/s measured on a DIRECT Tailscale link (2026-09-15).
+# It was 1.3 MB/s while the connection relayed through DERP, so this estimate is
+# roughly 10x shorter than it used to be. Override if the link changes:
+#   TRANSFER_RATE_MB_S=1.3 tg-prune
+RATE_MB_S="${TRANSFER_RATE_MB_S:-12}"
+RATE_BYTES_S=$(( ${RATE_MB_S%%.*} * 1000000 ))
+if (( RATE_BYTES_S <= 0 )); then
+  # Correct the LABEL too, not just the divisor. Guarding the arithmetic while
+  # still printing the rejected value reports a number that was not used, which
+  # is the quiet kind of wrong this project keeps finding.
+  RATE_BYTES_S=1000000
+  RATE_MB_S=1
+fi
+
 mb=$(( bytes / 1024 / 1024 ))
-mins=$(( bytes / 1300000 / 60 ))
+mins=$(( bytes / RATE_BYTES_S / 60 ))
 
 echo
-log "pruning would save ${mb} MB of transfer (~${mins} min at 1.3 MB/s)"
+log "pruning would save ${mb} MB of transfer (~${mins} min at ${RATE_MB_S} MB/s)"
 
 DONE_DIR="$(dirname "$BATCH_DIR")/tg-archived"
 

@@ -32,7 +32,9 @@ loop is sized against.
 
 | Thing | Value | Source |
 |---|---|---|
-| Card → VM throughput | ~1.3 MB/s | 3 GB in ~40 min over OTG + Tailscale |
+| Phone → VM throughput | **10–16 MB/s** | direct Tailscale, since 2026-09-15 |
+| — before UDP 41641 was opened | ~1.3 MB/s | DERP relay; see `docs/HARD-WON.md` |
+| Card → phone copy | ~71 MB/s | 3.2 GB in 45 s — never the bottleneck |
 | Battery drain with X4 attached | 1% / 3.3 min (~4.7 h usable) | observed |
 | Scan speed | ~3.7 GB/min | 37 GB in ~10 min |
 | VM free space | 145 GB of 147 GB | `df -h /mnt/media` |
@@ -306,7 +308,7 @@ to a `tg-archived/` sibling instead of deleting.)
 
 **This is where the real saving is.** The VM-side check below prevents a
 duplicate reaching Telegram, but by then the file has already crossed the cable
-at ~1.3 MB/s with the phone tethered and draining. Pruning first means those
+at ~12 MB/s with the phone tethered and draining. Pruning first means those
 bytes never move at all. Hashing reads at ~3.7 GB/min — about 170x faster than
 sending the same data — so checking always costs less than transferring.
 
@@ -409,7 +411,7 @@ nothing else backs it up.
 
 **Losing it costs bandwidth, not footage.** Everything staged would be
 re-uploaded: duplicates in the channel, and on a 250 GB archive, days of
-transfer at ~1.3 MB/s. The files themselves stay safe in Telegram.
+transfer at ~12 MB/s. The files themselves stay safe in Telegram.
 
 A wrong line is as bad as a missing file — a bad hash means that file
 re-uploads. Keep the backup somewhere that is neither the phone nor the VM.
@@ -432,7 +434,8 @@ updated=<unix timestamp>
 
 The dashboard card shows files done/remaining, a progress meter, total bytes
 archived, and an estimated transfer time for what is left — computed from the
-average size actually archived and the measured ~1.3 MB/s OTG rate, rather than
+average size actually archived and the measured ~12 MB/s direct-link rate
+(10–16 MB/s since UDP 41641 was opened), rather than
 a guess. `bytes_unknown` above zero means the byte total is a lower bound, and
 the card says so.
 

@@ -292,14 +292,18 @@ export default function StatusPage() {
           )}
           {payload.archive.remaining > 0 && (payload.archive.bytes ?? 0) > 0 && payload.archive.done > 0 && (
             /* Remaining transfer time, from the average size actually archived
-               rather than a guess. The card leg runs at ~1.3 MB/s over OTG,
-               which is the bottleneck - not the internet. */
+               rather than a guess.
+               12 MB/s is the midpoint of the 10-16 MB/s measured on a DIRECT
+               Tailscale link (2026-09-15). It was 1.3 MB/s while the connection
+               relayed through DERP, so this estimate is ~10x shorter than it
+               used to be - if it ever reads wildly optimistic, check
+               `tailscale status` for "relay" rather than "direct". */
             <StatRow
               label="Est. transfer left"
               value={formatDuration(
                 (payload.archive.remaining *
                   ((payload.archive.bytes ?? 0) / payload.archive.done)) /
-                  1_300_000,
+                  12_000_000,
               )}
             />
           )}

@@ -68,7 +68,7 @@ curl -s -H "X-API-Key: $K" "http://127.0.0.1:8384/rest/db/ignores?folder=dub20-7
 
 **But setting it here saves nothing.** The VM's folder is `receiveonly`, so a
 `.stignore` on the VM makes the VM *discard* what the phone sent — the bytes
-have already crossed the OTG cable at ~1.3 MB/s and the battery is already
+have already crossed the link at ~12 MB/s and the battery is already
 spent. The cost being optimised away is the cost already paid.
 
 Only an ignore list on the **phone's** folder prevents transmission, and the
@@ -358,44 +358,81 @@ pong ... via DERP(blr) in 71ms     (x10)
 direct connection not established
 ```
 
-**Every byte archived so far has gone through Tailscale's Bangalore DERP
+**Every byte archived before 2026-09-15 went through Tailscale's Bangalore DERP
 relay.** DERP is a fallback to keep connections alive when NAT traversal fails;
 it is deliberately rate-limited and is not meant for bulk transfer.
 
-The VM is not the problem — `tailscale netcheck` reports `UDP: true`,
+The VM was never the problem — `tailscale netcheck` reported `UDP: true`,
 `IPv4: yes, 152.67.1.135:36985`, `MappingVariesByDestIP: false`. A public IP
 with consistent NAT mapping is the easy side of a handshake. The phone is
 behind CGNAT or symmetric NAT (common on Indian consumer ISPs) with no
-reachable address to punch back to, and WiFi does not change this.
+reachable address to punch back to, and WiFi does not change that.
 
-**The only lever is opening UDP 41641 inbound on the VM**, so the phone can
-connect *to* the reachable side. One reachable end is enough. The cost is
-direct: P1's "nmap zero open ports, verified from outside" would no longer
-hold. It is WireGuard - encrypted, authenticated, silently dropping anything
-without a valid key, and materially different from exposing SSH - but it is
-still a hole in a boundary that was deliberately closed.
+### FIXED: open UDP 41641 inbound on the VM
 
-Roughly 1.3 MB/s vs a possible 10-15 MB/s: **250 GB is ~53 hours relayed, or
-~5 hours direct.**
+One reachable end is enough — the phone dials in to the side that is reachable.
+Added as an OCI ingress rule (`0.0.0.0/0`, UDP, port 41641). Result, immediate:
+
+```
+$ tailscale status
+100.104.203.100  oppo-reno-10x-zoom  android  active; direct 38.254.161.78:45974
+
+$ tailscale ping 100.104.203.100
+pong from oppo-reno-10x-zoom (100.104.203.100) via 38.254.161.78:45974 in 39ms
+```
+
+Direct on the **first** ping, where the relayed path took ten attempts and then
+gave up. Latency halved too: 39 ms against 69-116 ms.
+
+**Measured throughput: 10-16 MB/s, up from ~1.3.** 250 GB goes from ~53 hours
+to about 5.
+
+**No `ufw` change was needed.**
+`infra/ansible/roles/hardening/tasks/main.yml:121` has opened `41641/udp` since
+day one, with a comment naming this exact failure: *"Without this, Tailscale
+still works but falls back to a relay (DERP), which adds latency to every photo
+and video byte."* The host firewall anticipated it. Only the OCI security list
+blocked it — almost certainly collateral from bulk-deleting ingress rules
+rather than a decision anyone made.
+
+### What P1 actually proved, and what it did not
+
+The claim was "nmap zero open ports — VERIFIED from outside", against 22, 80,
+443, 2283, 111, 3000, 5432, 8080.
+
+**`nmap -Pn -p-` scans TCP only.** `nmap -sU` was never run, so the UDP surface
+was never verified closed — it was assumed closed, then written up in wording
+broader than the test behind it. Opening 41641 does not falsify a measurement;
+it falsifies a sentence that was always wider than its evidence. P1 is now
+narrowed to "zero open **TCP** ports", which was owed regardless.
+
+Behind the port is WireGuard: encrypted, authenticated, and it drops packets
+without a valid key without replying, so a scan often cannot confirm it is
+listening. Reversible in two minutes by deleting the ingress rule, at the cost
+of returning to relay speed.
 
 ### Measured, not estimated
 
 | Thing | Value |
 |---|---|
-| Phone → VM throughput | **~1.3 MB/s** — the DERP relay, see above |
+| Phone → VM, **direct** | **10–16 MB/s** (since 2026-09-15) |
+| Phone → VM, relayed | ~1.3 MB/s — what it was before |
 | Card → phone copy | **~71 MB/s** (3.2 GB in 45 s) |
 | Battery drain, X4 attached | **1% / 3.3 min** → ~4.7h usable |
 | Scan speed | **~3.7 GB/min** |
-| Wifi line speed | 125 Mb/s (~15 MB/s) — idle at 8% utilisation |
+| Wifi line speed | 125 Mb/s (~15 MB/s) — now the actual ceiling |
 
 **An earlier version of this table blamed the OTG read and Syncthing hashing.
 That was wrong**, and it was never tested — it was inferred from the one number
-available and then written down as fact. The card does 71 MB/s; the relay does
-1.3. See the entry above for the three measurements that separate them.
+available and then written down as fact. The card does 71 MB/s; the relay did
+1.3. See the entry above for the three measurements that separated them.
 
-The practical sizing still holds while the connection relays: a 135 GB batch is
-~30 hours of transfer. **Size batches at 10–20 GB**, one charge each. If UDP
-41641 is ever opened and the link goes direct, that changes by roughly 10×.
+**Batch sizing changed with the direct connection.** At 10-16 MB/s a 135 GB
+batch is roughly 2.5-4 hours rather than ~30, so the binding constraint is no
+longer transfer time but battery: 1% per 3.3 minutes with the X4 attached,
+about 4.7 hours usable. Keep the phone on power for a long run, or size batches
+to a charge. The old 10-20 GB guidance was a workaround for the relay and is no
+longer the reason.
 
 ### tg-prune, verified against the real card 2026-09-15
 

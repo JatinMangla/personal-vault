@@ -58,7 +58,8 @@ UPLOADED_LOG="$WORK_DIR/uploaded.sha256"
 LOOP_LOCK="$WORK_DIR/.loop.lock"
 
 # How long to wait for staging to refill before concluding the card is done.
-# Syncthing moves ~1.3 MB/s over OTG, so a large file can take many minutes to
+# Syncthing moves ~10-16 MB/s on a direct link, so a large file still takes
+# minutes to
 # appear. Two consecutive empty passes this far apart means no more is coming.
 IDLE_WAIT_SECONDS="${IDLE_WAIT_SECONDS:-300}"
 
