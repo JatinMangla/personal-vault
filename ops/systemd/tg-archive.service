@@ -11,7 +11,15 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 User=ubuntu
-ExecStart=/opt/insta360-archive/bin/tg-archive.sh start
+# tg-go, not tg-archive.sh start. tg-archive drains but never touches the
+# manifest, so an automatic run would hit "NOT IN MANIFEST: <file>" on every
+# batch and retry forever - Check #1 correctly refusing to upload footage it
+# cannot verify. tg-go fingerprints what arrived first, then drains.
+#
+# --now skips tg-go's own wait-for-Syncthing step: tg-archive-settle.timer has
+# already waited two minutes for the transfer to go quiet, so waiting again
+# would only delay the drain.
+ExecStart=/opt/insta360-archive/bin/tg-go.sh --now
 
 # The env file is root:ubuntu 0640, NOT 0600. The service runs as ubuntu and
 # could not read a root-only file - that was the first run's failure.
