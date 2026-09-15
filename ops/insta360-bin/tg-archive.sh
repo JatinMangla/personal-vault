@@ -283,6 +283,44 @@ cmd_start() {
     pass=$(( pass + 1 ))
     log "--- batch $pass: ${#batch[@]} file(s) ---"
 
+    # Fingerprint anything new BEFORE Check #1 sees it.
+    #
+    # This has to happen per batch, not once at startup. Syncthing delivers
+    # while the loop runs, so a manifest built at the start covers only what
+    # had arrived by then and every later file fails Check #1 as "NOT IN
+    # MANIFEST" - correctly, since it genuinely was never fingerprinted. On the
+    # first real multi-file batch that retried the same failure 21 times.
+    #
+    # Same matching rule as verify-batch.sh (last field, strip * and any
+    # directory) and the same bare-filename hash, so the two can never disagree
+    # about whether a file is listed.
+    # The manifest is often created by hand with `sudo tee`, which leaves it
+    # root-owned. This runs as ubuntu under systemd, so the append would fail
+    # with permission denied and take the drain down with it under `set -e`.
+    # Say so plainly instead - the fix is one chown, and a cryptic abort here
+    # would look like a Check #1 fault rather than a file-mode one.
+    if [[ ! -w "$MANIFEST" ]]; then
+      err "manifest is not writable by $(id -un): $MANIFEST"
+      err "  sudo chown ubuntu:ubuntu $MANIFEST"
+      err "new files cannot be fingerprinted, so Check #1 will reject them"
+      sleep 60
+      continue
+    fi
+
+    manifest_new=0
+    for f in "${batch[@]}"; do
+      base="$(basename "$f")"
+      if awk -v want="$base" '
+           { n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n)
+             if (n == want) { found = 1; exit } }
+           END { exit !found }' "$MANIFEST" 2>/dev/null; then
+        continue
+      fi
+      ( cd "$STAGING_DIR" && sha256sum "$base" ) >> "$MANIFEST"
+      manifest_new=$(( manifest_new + 1 ))
+    done
+    (( manifest_new )) && log "fingerprinted $manifest_new new file(s)"
+
     # Do NOT let a failed batch kill the loop. tg-upload.sh already refuses to
     # delete anything it could not verify, so a failure leaves staging intact
     # and retrying is safe. Stopping the whole drain because one batch hit a

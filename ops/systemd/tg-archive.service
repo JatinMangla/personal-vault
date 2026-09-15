@@ -16,10 +16,15 @@ User=ubuntu
 # batch and retry forever - Check #1 correctly refusing to upload footage it
 # cannot verify. tg-go fingerprints what arrived first, then drains.
 #
-# --now skips tg-go's own wait-for-Syncthing step: tg-archive-settle.timer has
-# already waited two minutes for the transfer to go quiet, so waiting again
-# would only delay the drain.
-ExecStart=/opt/insta360-archive/bin/tg-go.sh --now
+# NOT --now. That was wrong: --now skips wait_for_sync, so update_manifest ran
+# while Syncthing was still delivering, fingerprinted only what had arrived by
+# then, and every later file failed Check #1 as "NOT IN MANIFEST" - the loop
+# retried that same failure 21 times on the first real multi-file batch.
+#
+# The settle timer waits for two minutes of quiet, but a gap that long can open
+# mid-transfer while the phone hashes the next file, so the timer alone is not
+# proof the transfer finished. tg-go asks Syncthing directly.
+ExecStart=/opt/insta360-archive/bin/tg-go.sh
 
 # The env file is root:ubuntu 0640, NOT 0600. The service runs as ubuntu and
 # could not read a root-only file - that was the first run's failure.
