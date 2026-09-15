@@ -333,18 +333,69 @@ root. The Telethon session file would hit the same wall.
 
 ## The phone (Oppo Reno 10x Zoom, Android 12, ColorOS)
 
+### The 1.3 MB/s is Tailscale RELAYING, not the OTG card
+
+Measured 2026-09-15, and it overturns the earlier assumption in this file that
+"the bottleneck is the OTG read plus Syncthing hashing".
+
+Three measurements settle it:
+
+| Test | Result |
+|---|---|
+| Copy 3.2 GB card → phone internal storage | **45 seconds (~71 MB/s)** |
+| Syncthing from the **card** | ~1.3 MB/s |
+| Syncthing from **internal storage** | ~1.26 MB/s |
+
+The source makes no difference, and the card itself is **55× faster** than what
+Syncthing achieves. So it is neither the card, the reader, nor the cable.
+
+```
+$ tailscale status
+100.104.203.100  oppo-reno-10x-zoom  android  active; relay "blr", tx 147466604 rx 3775874024
+
+$ tailscale ping 100.104.203.100
+pong ... via DERP(blr) in 71ms     (x10)
+direct connection not established
+```
+
+**Every byte archived so far has gone through Tailscale's Bangalore DERP
+relay.** DERP is a fallback to keep connections alive when NAT traversal fails;
+it is deliberately rate-limited and is not meant for bulk transfer.
+
+The VM is not the problem — `tailscale netcheck` reports `UDP: true`,
+`IPv4: yes, 152.67.1.135:36985`, `MappingVariesByDestIP: false`. A public IP
+with consistent NAT mapping is the easy side of a handshake. The phone is
+behind CGNAT or symmetric NAT (common on Indian consumer ISPs) with no
+reachable address to punch back to, and WiFi does not change this.
+
+**The only lever is opening UDP 41641 inbound on the VM**, so the phone can
+connect *to* the reachable side. One reachable end is enough. The cost is
+direct: P1's "nmap zero open ports, verified from outside" would no longer
+hold. It is WireGuard - encrypted, authenticated, silently dropping anything
+without a valid key, and materially different from exposing SSH - but it is
+still a hole in a boundary that was deliberately closed.
+
+Roughly 1.3 MB/s vs a possible 10-15 MB/s: **250 GB is ~53 hours relayed, or
+~5 hours direct.**
+
 ### Measured, not estimated
 
 | Thing | Value |
 |---|---|
-| Card → VM throughput | **~1.3 MB/s** (3 GB in ~40 min) |
+| Phone → VM throughput | **~1.3 MB/s** — the DERP relay, see above |
+| Card → phone copy | **~71 MB/s** (3.2 GB in 45 s) |
 | Battery drain, X4 attached | **1% / 3.3 min** → ~4.7h usable |
 | Scan speed | **~3.7 GB/min** |
-| Wifi upload | 125 Mb/s — **not** the bottleneck |
+| Wifi line speed | 125 Mb/s (~15 MB/s) — idle at 8% utilisation |
 
-The bottleneck is the OTG read plus Syncthing hashing, **not** the internet.
-A 135GB batch would take ~30 hours of connected transfer, not the 2.4 hours line
-speed suggests. **Size batches at 10–20GB**, one charge each.
+**An earlier version of this table blamed the OTG read and Syncthing hashing.
+That was wrong**, and it was never tested — it was inferred from the one number
+available and then written down as fact. The card does 71 MB/s; the relay does
+1.3. See the entry above for the three measurements that separate them.
+
+The practical sizing still holds while the connection relays: a 135 GB batch is
+~30 hours of transfer. **Size batches at 10–20 GB**, one charge each. If UDP
+41641 is ever opened and the link goes direct, that changes by roughly 10×.
 
 ### tg-prune, verified against the real card 2026-09-15
 
