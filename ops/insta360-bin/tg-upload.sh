@@ -129,17 +129,37 @@ log "batch of ${#batch[@]} file(s)"
 avail_kb="$(df -P "$STAGING_DIR" | awk 'NR==2{print $4}')"
 avail_gb=$(( avail_kb / 1024 / 1024 ))
 
-largest_bytes=0
+# Size the round trip by the whole ARCHIVE, not the largest file.
+#
+# Check #2 downloads the entire channel back, so the scratch space needed is
+# everything ever archived plus this batch - not the biggest file in it. That
+# was always true, but it only started mattering when the round-trip directory
+# moved onto this volume; before, it silently filled the boot disk instead.
+#
+# The archive size comes from the ledger's third column, written at upload time
+# precisely because Telegram cannot be asked how big a channel is without
+# downloading all of it. Rows predating that column contribute nothing, so this
+# can UNDER-estimate on an old archive - hence the margin on top.
+archive_bytes=0
+if [[ -r "$UPLOADED_LOG" ]]; then
+  archive_bytes="$(awk '$3 ~ /^[0-9]+$/ { s += $3 } END { printf "%d", s + 0 }' \
+    "$UPLOADED_LOG" 2>/dev/null || echo 0)"
+fi
+
+batch_bytes=0
 for f in "${batch[@]}"; do
   sz="$(stat -c %s "$f")"
-  (( sz > largest_bytes )) && largest_bytes="$sz"
+  batch_bytes=$(( batch_bytes + sz ))
 done
-largest_gb=$(( largest_bytes / 1024 / 1024 / 1024 + 1 ))
 
-log "free: ${avail_gb} GiB (margin ${GUARD_MARGIN_GB}, round-trip ~${largest_gb})"
+roundtrip_gb=$(( (archive_bytes + batch_bytes) / 1024 / 1024 / 1024 + 1 ))
 
-if (( avail_gb - largest_gb < GUARD_MARGIN_GB )); then
+log "free: ${avail_gb} GiB (margin ${GUARD_MARGIN_GB}, round-trip ~${roundtrip_gb})"
+
+if (( avail_gb - roundtrip_gb < GUARD_MARGIN_GB )); then
   err "would breach the ${GUARD_MARGIN_GB} GiB margin - refusing"
+  err "  Check #2 re-downloads the whole channel (~$(( archive_bytes / 1024 / 1024 / 1024 )) GiB)"
+  err "  plus this batch. Verifying by message id would remove this cost."
   exit 1
 fi
 
@@ -195,7 +215,21 @@ rm -f "$manifest_copy"
 
 log "Check #2 - downloading the channel back"
 
-rt_dir="$WORK_DIR/roundtrip.$$"
+# On the MEDIA volume, not WORK_DIR.
+#
+# Check #2 downloads the ENTIRE channel back to verify, so this directory grows
+# to the size of the whole archive on every batch - not the size of the batch.
+# WORK_DIR is /var/lib/insta360-archive/work, which sits on the 50 GB boot
+# volume shared with Immich and the OS. On 2026-09-15 a 20 GB batch drove boot
+# usage from 24.7% to 68.9% in 45 minutes, and it would have filled outright
+# once the channel passed ~35 GB.
+#
+# A dot-directory inside staging: the media volume has 147 GB, the unit already
+# permits writing there, and `"$STAGING_DIR"/*.insv` does not match dotfiles or
+# recurse, so the uploader can never mistake a round-trip copy for a new file.
+ROUNDTRIP_BASE="${ROUNDTRIP_BASE:-$STAGING_DIR/.roundtrip}"
+mkdir -p "$ROUNDTRIP_BASE"
+rt_dir="$ROUNDTRIP_BASE/$$"
 mkdir -p "$rt_dir"
 cleanup() { [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"; }
 trap cleanup EXIT
