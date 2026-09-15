@@ -560,6 +560,38 @@ unprotected either way; the manifest's primary job is the Telegram round trip.
   backgrounded.
 - **rclone under Termux reading OTG** — needs root.
 
+### "Syncthing is not scanning" — `globalFiles: 0` with a healthy connection
+
+Seen for real on 2026-09-15. Files were sitting in `tg-batch` and nothing moved:
+
+```
+"globalFiles": 0      "localFiles": 0
+"needFiles": 0        "needBytes": 0        "state": "idle"
+
+"connected": true     "paused": false
+```
+
+**Read those two blocks together.** The link is fine — the phone and VM are
+talking. `globalFiles` is the phone's own count of what it has to offer, and
+zero means the phone is claiming the folder is empty. The VM is reporting that
+faithfully. So the fault is always phone-side, never the network or the VM.
+
+**Fixed by restarting the Syncthing app on the phone.** ColorOS had suspended
+it; it held the connection open while no longer scanning, which is the
+confusing part — a dead app that still looks connected.
+
+Diagnosis order, fastest first:
+
+1. `globalFiles: 0` **and** `connected: true` → phone-side, restart the app
+2. `connected: false` → app killed outright, or Tailscale down
+3. `globalFiles: N`, `needFiles: 0` → VM thinks it has everything; check the
+   files are really in `tg-batch` and not internal storage
+4. `state: "error"` → folder fault, usually the missing `.stfolder` marker
+
+If restarting works but the files still do not appear, tap the folder in the
+app and hit **Rescan**: Android does not reliably fire filesystem events for
+files written by another app, so a manual scan is sometimes needed.
+
 ### ColorOS specifics
 
 **OTG switches off after ~10 minutes** of perceived inactivity, with no
