@@ -346,6 +346,38 @@ The bottleneck is the OTG read plus Syncthing hashing, **not** the internet.
 A 135GB batch would take ~30 hours of connected transfer, not the 2.4 hours line
 speed suggests. **Size batches at 10–20GB**, one charge each.
 
+### tg-prune, verified against the real card 2026-09-15
+
+```
+[13:49:03] 1 file(s) in tg-batch
+[13:49:05] ledger holds 1 archived file(s)
+[13:49:06] already archived : 1
+[13:49:06] still to upload  : 0
+[13:49:06] pruning would save 184 MB of transfer (~2 min at 1.3 MB/s)
+[13:49:06] removed VID_20250219_155539_00_032.insv
+```
+
+Two bugs surfaced on the way, both worth keeping in mind:
+
+**The ledger was empty for a file that was demonstrably archived.** Only
+`tg-archive.sh` wrote `uploaded.sha256`; `tg-upload.sh` read it but never wrote
+it, and the first upload had been a direct `tg-upload.sh` run. Fixed by moving
+the write into `tg-upload.sh` where the knowledge lives. Anything archived
+before 2026-09-15 needs backfilling by hand:
+
+```bash
+# hash it on the card, in Termux
+sha256sum /storage/9C33-6BBD/DCIM/tg-batch/NAME.insv
+# then, on the VM
+echo "<hash> NAME.insv" | sudo tee -a /var/lib/insta360-archive/work/uploaded.sha256
+```
+
+**A placeholder pasted verbatim into the ledger was caught by the hash check.**
+The literal string `PASTE_HASH_HERE` went in as a hash; the next prune matched
+the filename, found the content did not match, and reported
+`same name, different content - keeping` rather than deleting a file it could
+not verify. Name-matching alone would have deleted an unarchived original.
+
 ### Termux CAN read the OTG card — name the volume explicitly
 
 **This entry previously said the opposite, as settled fact. It was wrong, and
