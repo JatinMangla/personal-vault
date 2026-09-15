@@ -71,6 +71,28 @@ jobs:
             exit 1
           fi
 
+          # Normalise the URL rather than failing on a paste artefact.
+          #
+          # A trailing slash makes the request URL "...supabase.co//rest/v1/..."
+          # and curl rejects it with "(3) Malformed input to a URL function" -
+          # a genuinely cryptic error for what is a one-character mistake that
+          # the GitHub secrets UI gives no way to see. Surrounding whitespace
+          # and a stray CR (from pasting on Windows) are equally invisible and
+          # equally fatal, so strip all three.
+          SUPABASE_URL="$(printf '%s' "$SUPABASE_URL" | tr -d ' \t\r\n')"
+          SUPABASE_URL="${SUPABASE_URL%/}"
+
+          case "$SUPABASE_URL" in
+            https://*) ;;
+            *)
+              echo "SUPABASE_URL does not start with https:// after trimming."
+              echo "Expected the project API URL, e.g. https://<ref>.supabase.co"
+              exit 1
+              ;;
+          esac
+
+          echo "using: ${SUPABASE_URL} (${#SUPABASE_URL} chars after trimming)"
+
           # Capture body and status separately: a 404 or 401 returns a JSON
           # error document, and treating that as a row count would report
           # success for a prune that deleted nothing.
