@@ -385,6 +385,27 @@ the filename, found the content did not match, and reported
 `same name, different content - keeping` rather than deleting a file it could
 not verify. Name-matching alone would have deleted an unarchived original.
 
+### `sha256sum /full/path` writes the full path into the manifest
+
+Not `sha256sum "$f"` — `( cd "$DIR" && sha256sum "$base" )`.
+
+`sha256sum` records the argument it was given. Hashing by full path writes
+`<hash>  /mnt/media/tg-staging/VID_x.insv` into the manifest, and then:
+
+- a dedupe check looking for a bare filename never matches, so every re-run
+  appends the same file again
+- every reader has to strip the directory (`sub(/.*\//, "", n)`) to compare
+
+Both `verify-batch.sh` and `tg-go` strip it defensively, so a legacy manifest
+full of paths still works — but write bare names and the problem does not arise.
+
+Caught by a fixture asserting that a second run adds no lines. The first run
+looked perfectly correct on its own.
+
+(Note on Windows: Git Bash's `sha256sum` defaults to binary mode and prefixes
+the filename with `*`. Linux does not. Every reader here strips a leading `*`
+for that reason.)
+
 ### Two bugs only a real install could find (2026-09-15)
 
 The first genuine batch through the finished pipeline — 694 MB, card to Telegram

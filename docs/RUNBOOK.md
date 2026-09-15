@@ -209,6 +209,52 @@ a small file but not a large one, say so rather than writing a bare `PASS`.
 
 ---
 
+## The whole thing, in two commands
+
+Once everything is installed, archiving a batch is:
+
+**📱 Phone** — move footage into `tg-batch`, connect the X4, then:
+
+```bash
+ssh immich tg-go
+```
+
+That one line waits for Syncthing to finish, fingerprints what arrived, uploads
+and verifies every file, and refreshes the dashboard. It runs for as long as the
+transfer takes and reports at each stage.
+
+**📱 Phone** — when it reports 0 remaining:
+
+```bash
+~/bin/tg-prune.sh --apply
+```
+
+That is the whole routine. Everything below is for when something needs
+inspecting.
+
+```bash
+tg-go            # wait for the sync, then archive everything
+tg-go --now      # skip the wait, staging is already full
+tg-go --status   # what is the state right now, change nothing
+```
+
+`tg-go` **appends** to the manifest, never overwrites it. The manifest records
+everything that has ever been on the card and `tg-archive status` counts against
+it, so overwriting it with just the current batch collapses `total` to the batch
+size and makes the drain conclude there is nothing left to do. That mistake cost
+a real session on 2026-09-15.
+
+For the `ssh immich` shorthand, put this in `~/.ssh/config` on the phone:
+
+```
+Host immich
+  HostName 100.88.183.74
+  User ubuntu
+  IdentityFile ~/.ssh/immich_phone
+  ServerAliveInterval 30
+  ServerAliveCountMax 6
+```
+
 ## Draining the card with `tg-archive`
 
 ```bash
