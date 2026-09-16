@@ -42,7 +42,10 @@ set -euo pipefail
 
 ENV_FILE="${TG_ENV_FILE:-/etc/personal-vault/tg-archive.env}"
 if [[ -r "$ENV_FILE" ]]; then
-  set -a; source "$ENV_FILE"; set +a
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
 fi
 
 DEST=""

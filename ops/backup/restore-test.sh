@@ -24,8 +24,13 @@ if [[ ! -r "$ENV_FILE" ]]; then
   echo "FATAL: cannot read $ENV_FILE" >&2
   exit 1
 fi
+# A shellcheck directive applies to the NEXT COMMAND, and on a compound line
+# that command is `set -a`, not the `source` - so SC1090 fired anyway and the
+# directive looked present but did nothing. Split so it binds to the source.
+set -a
 # shellcheck source=/dev/null
-set -a; source "$ENV_FILE"; set +a
+source "$ENV_FILE"
+set +a
 
 export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
 export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/root/.restic-pass}"

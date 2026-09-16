@@ -27,7 +27,10 @@ if [[ ! -r "$ENV_FILE" ]]; then
   echo "FATAL: cannot read $ENV_FILE" >&2
   exit 1
 fi
-set -a; source "$ENV_FILE"; set +a
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
 
 STAGING_DIR="${STAGING_DIR:?STAGING_DIR not set}"
 MANIFEST="${MANIFEST:?MANIFEST not set}"

@@ -99,6 +99,49 @@ jobs:
         # These scripts run unattended on a remote box; a bug surfaces as a
         # silently failing timer, which is the failure mode backups are most
         # vulnerable to.
+        #
+        # ops/insta360-bin was NOT scanned until 2026-09-16 - the archive
+        # pipeline, which deletes footage after verifying it, was the only ops
+        # directory with no static analysis at all. Every one of them now
+        # parses clean.
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck -S warning ops/backup/*.sh ops/metrics/*.sh .claude/hooks/*.sh
+          shellcheck -S warning \
+            ops/backup/*.sh \
+            ops/metrics/*.sh \
+            ops/insta360-bin/*.sh \
+            .claude/hooks/*.sh
+
+      - name: Shell scripts parse under bash
+        # shellcheck is a linter, not a parser: it reports style and common
+        # mistakes but does not prove the file is valid shell. `bash -n` does.
+        # This project has repeatedly lost `||` operators to terminal paste
+        # corruption, which produces VALID shell with the wrong meaning - so
+        # this catches the parse failures and the grep below catches the rest.
+        run: |
+          set -euo pipefail
+          for f in ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh .claude/hooks/*.sh; do
+            bash -n "$f" || { echo "SYNTAX ERROR: $f"; exit 1; }
+          done
+          echo "all shell scripts parse"
+
+      - name: No silently eaten shell operators
+        # `[[ -d "$X" ]]  { ... }` and `cmd >/dev/null  true` are valid shell
+        # with the wrong meaning - bash -n cannot catch them. Four separate
+        # instances reached this repo by being dictated through a phone
+        # terminal that swallowed the `||`.
+        run: |
+          set -euo pipefail
+          if grep -rnE ']] +[{]|null +[{]|>/dev/null +[a-z]' \
+               ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh .claude/hooks/*.sh; then
+            echo "BLOCKER: a shell operator looks to have been eaten - see docs/HARD-WON.md"
+            exit 1
+          fi
+          echo "no eaten operators found"
+
+      - name: Message-id parser fixtures
+        # extract_ids() in tg-upload.sh decides which Telegram message Check #2
+        # fetches back. A WRONG id fetches the wrong bytes; the first draft
+        # turned VID_20260210_061658_00_135.insv into message id 20260210.
+        # These fixtures must stay in sync with the parser they mirror.
+        run: bash ops/insta360-bin/test-extract-ids.sh
