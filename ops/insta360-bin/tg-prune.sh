@@ -143,6 +143,22 @@ fi
 
 log "${#files[@]} file(s) in tg-batch"
 
+# Say that hashing is about to take minutes, and roughly how many.
+#
+# Without this the script prints nothing between fetching the ledger and its
+# summary, so a large batch looks hung. On 2026-09-16 that silence led to a
+# five-minute wait being reported as a crash, and then to a healthy card being
+# diagnosed as failing. Measured OTG read: 20.4 MB/s.
+hash_bytes=0
+for f in "${files[@]}"; do
+  sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+  hash_bytes=$(( hash_bytes + sz ))
+done
+if (( hash_bytes > 2000000000 )); then
+  log "hashing up to $(( hash_bytes / 1000000000 )) GB - expect ~$(( hash_bytes / 20000000 / 60 )) min at 20 MB/s over OTG"
+  log "  (it is reading the card, not stuck; Ctrl+C is safe - nothing is deleted until every file is checked)"
+fi
+
 LEDGER="$(mktemp "${TMPDIR:-/data/data/com.termux/files/usr/tmp}/ledger.XXXXXX")"
 trap 'rm -f "$LEDGER"' EXIT
 
@@ -176,15 +192,22 @@ unreadable=0
 
 # How long to allow a single hash before giving up on that file.
 #
-# A failing SD card does not return an error promptly - the kernel retries a
-# bad sector for a long time first, so the script simply appears to hang. On
-# 2026-09-16 a 5.9 GB file stalled the prune for over five minutes with no
-# output, which is indistinguishable from a crash to the operator.
+# MEASURED, not assumed. `dd` over OTG on 2026-09-16 read 200 MiB in 10.3 s =
+# 20.4 MB/s, so a 5.9 GB file needs ~5 minutes and an 8 GB file ~6.5.
 #
-# Generous enough for a healthy card: hashing reads at ~3.7 GB/min, so even a
-# 6 GB file finishes inside two minutes. Override for a slower reader:
-#   HASH_TIMEOUT=600 tg-prune --apply
-HASH_TIMEOUT="${HASH_TIMEOUT:-300}"
+# The earlier "~3.7 GB/min" figure in this project is a SCAN rate quoted from
+# Syncthing, not an OTG read rate; using it here would have set a timeout that
+# aborts precisely the large files this guard exists to handle. A 5.9 GB file
+# would have landed within seconds of a 300 s limit.
+#
+# 30 minutes is deliberately far above any healthy read: at 20 MB/s it covers a
+# 36 GB file, which is larger than the card produces. The point is to bound an
+# infinite retry storm on genuinely bad sectors, NOT to second-guess a slow
+# link - a file that is merely slow must be allowed to finish, because timing
+# it out would mean keeping a file that is safely archived and could have been
+# pruned. Override for an unusually slow reader:
+#   HASH_TIMEOUT=3600 tg-prune --apply
+HASH_TIMEOUT="${HASH_TIMEOUT:-1800}"
 
 for f in "${files[@]}"; do
   base="$(basename "$f")"
