@@ -139,6 +139,12 @@ jobs:
           fi
           echo "no eaten operators found"
 
+      - name: Batch-splitting fixtures
+        # The fitting loop decides how much goes into one batch. Too much fills
+        # the media volume mid-Check-#2; too little stalls the drain. Both
+        # failures are silent, so the arithmetic is pinned by fixtures.
+        run: bash ops/insta360-bin/test-batch-split.sh
+
       - name: Message-id parser fixtures
         # extract_ids() in tg-upload.sh decides which Telegram message Check #2
         # fetches back. A WRONG id fetches the wrong bytes; the first draft

@@ -13,21 +13,46 @@ set -a
 source "$ENV_FILE"
 set +a
 
-DIR="${1:-${STAGING_DIR:?STAGING_DIR not set}}"
 MANIFEST="${MANIFEST:?MANIFEST not set}"
 
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }
 
-[[ -d "$DIR" ]]     ||  { err "no such directory: $DIR"; exit 1; }
 [[ -r "$MANIFEST" ]] ||  { err "manifest not readable: $MANIFEST"; exit 1; }
 
-shopt -s nullglob
-files=("$DIR"/*.insv)
-shopt -u nullglob
+# Accept either a DIRECTORY (verify everything staged) or an explicit LIST OF
+# FILES (verify exactly these).
+#
+# The list form exists because tg-upload.sh now splits a large staging
+# directory into batches that fit the disk, leaving the remainder staged. With
+# only the directory form, Check #1 would re-hash every deferred file on every
+# pass - minutes of wasted reads - and, worse, a deferred file that is not yet
+# in the manifest would fail the check and abort a batch that was otherwise
+# perfectly fine.
+#
+# One argument that is a directory keeps the old behaviour, so running this by
+# hand against STAGING_DIR still works exactly as documented.
+files=()
+if (( $# == 0 )); then
+  DIR="${STAGING_DIR:?STAGING_DIR not set}"
+  [[ -d "$DIR" ]] || { err "no such directory: $DIR"; exit 1; }
+  shopt -s nullglob
+  files=("$DIR"/*.insv)
+  shopt -u nullglob
+elif (( $# == 1 )) && [[ -d "$1" ]]; then
+  DIR="$1"
+  shopt -s nullglob
+  files=("$DIR"/*.insv)
+  shopt -u nullglob
+else
+  for arg in "$@"; do
+    [[ -f "$arg" ]] || { err "no such file: $arg"; exit 1; }
+    files+=("$arg")
+  done
+fi
 
 if (( ${#files[@]} == 0 )); then
-  log "no .insv files in $DIR — nothing to verify"
+  log "no .insv files to verify"
   exit 0
 fi
 

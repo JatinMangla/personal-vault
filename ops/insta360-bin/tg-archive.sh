@@ -274,6 +274,12 @@ cmd_start() {
   log "stop with: systemctl stop tg-archive (safe at any point)"
   write_state running
 
+  # A transient failure is worth retrying; an endless run of them is not. Ten
+  # attempts at 60 s apart is ten minutes of patience, which covers a flood-wait
+  # or a brief network outage, and then reports rather than hiding the fault.
+  local MAX_CONSECUTIVE_FAILURES="${MAX_CONSECUTIVE_FAILURES:-10}"
+  local consecutive_failures=0
+
   local pass=0 idle_passes=0 batch
 
   while true; do
@@ -359,14 +365,46 @@ cmd_start() {
     # and retrying is safe. Stopping the whole drain because one batch hit a
     # flood-wait ceiling would mean babysitting it again, which is the thing
     # this script exists to avoid.
-    if "$UPLOADER"; then
+    upload_rc=0
+    "$UPLOADER" || upload_rc=$?
+
+    if (( upload_rc == 0 )); then
       # tg-upload.sh records the batch in uploaded.sha256 itself, before it
       # clears staging - see the note near the top of this file.
       log "batch $pass verified and recorded"
       write_state running
+      consecutive_failures=0
+
+    elif (( upload_rc == 2 )); then
+      # PERMANENT. The uploader cannot fit even one file in the space available,
+      # so retrying changes nothing: staging does not shrink, free space does
+      # not grow, and the next pass hits the identical arithmetic.
+      #
+      # This used to be indistinguishable from a flood-wait, so the loop slept
+      # 60 s and tried the same directory again - forever, with one error line
+      # repeating and nothing to say it would never succeed. A 100 GB staging
+      # directory spun silently until someone ran `systemctl stop`.
+      err "batch $pass cannot fit in the available space - stopping the drain"
+      err "this will NOT resolve by retrying; see the uploader's output above"
+      write_state incomplete
+      return 1
+
     else
-      err "batch $pass failed - staging left intact, will retry"
-      err "if this repeats, run tg-upload.sh by hand to see the full output"
+      # Transient: flood-wait ceiling, a network drop, a round-trip mismatch.
+      # tg-upload.sh never deletes what it could not verify, so retrying is
+      # safe. But do not retry forever either - a fault that survives this many
+      # attempts needs a human, and an endless loop hides that.
+      consecutive_failures=$(( consecutive_failures + 1 ))
+      err "batch $pass failed (rc=$upload_rc, attempt $consecutive_failures/$MAX_CONSECUTIVE_FAILURES)"
+      err "staging left intact, will retry"
+
+      if (( consecutive_failures >= MAX_CONSECUTIVE_FAILURES )); then
+        err "giving up after $consecutive_failures consecutive failures"
+        err "run tg-upload.sh by hand to see the full output"
+        write_state incomplete
+        return 1
+      fi
+
       sleep 60
     fi
   done

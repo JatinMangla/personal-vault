@@ -154,18 +154,10 @@ if (( ${#batch[@]} == 0 )); then
 fi
 
 (( skipped )) && log "skipped $skipped file(s) already in the archive"
-log "batch of ${#batch[@]} file(s)"
 
 avail_kb="$(df -P "$STAGING_DIR" | awk 'NR==2{print $4}')"
 avail_gb=$(( avail_kb / 1024 / 1024 ))
 
-# Size the round trip by the whole ARCHIVE, not the largest file.
-#
-# Check #2 downloads the entire channel back, so the scratch space needed is
-# everything ever archived plus this batch - not the biggest file in it. That
-# was always true, but it only started mattering when the round-trip directory
-# moved onto this volume; before, it silently filled the boot disk instead.
-#
 # The archive size comes from the ledger's third column, written at upload time
 # precisely because Telegram cannot be asked how big a channel is without
 # downloading all of it. Rows predating that column contribute nothing, so this
@@ -176,21 +168,78 @@ if [[ -r "$UPLOADED_LOG" ]]; then
     "$UPLOADED_LOG" 2>/dev/null || echo 0)"
 fi
 
+GIB=$(( 1024 * 1024 * 1024 ))
+avail_bytes=$(( avail_kb * 1024 ))
+
+# TAKE ONLY WHAT FITS. Previously this globbed every .insv in staging as one
+# batch and refused outright if the round trip would not fit - so 100 GB in
+# staging meant the guard refused, tg-archive.sh retried the identical
+# directory every 60 seconds, and nothing ever uploaded. Staging could not
+# shrink, because the refusal happens before any file is touched.
+#
+# Now the batch is filled file by file until the next one would breach the
+# margin, and whatever does not fit STAYS IN STAGING for the next pass. The
+# drain loop then makes progress on every iteration instead of spinning.
+#
+# THE PEAK, which the old arithmetic got wrong:
+#
+#   staged .insv        the batch, already on disk
+#   + .roundtrip        what Check #2 downloads back
+#   + margin            headroom for Immich
+#
+# The old guard computed `archive + batch` and compared it to free space,
+# forgetting the batch is ALREADY on disk and is therefore counted twice during
+# Check #2. A 60 GB batch against a 31 GB archive passed that check and would
+# then have filled a 147 GB volume outright.
+#
+# What Check #2 actually downloads depends on which path it takes:
+#   - by message id (normal)  -> just this batch
+#   - full channel (fallback) -> the whole archive plus this batch
+# Size for the FALLBACK, because that is the one that can fill the disk, and a
+# guard that is only correct on the happy path is not a guard.
+margin_bytes=$(( GUARD_MARGIN_GB * GIB ))
+budget=$(( avail_bytes - margin_bytes - archive_bytes ))
+
+fitted=()
+deferred=0
+deferred_bytes=0
 batch_bytes=0
+
 for f in "${batch[@]}"; do
-  sz="$(stat -c %s "$f")"
-  batch_bytes=$(( batch_bytes + sz ))
+  sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+
+  # Each file costs its size TWICE: it already occupies staging, and Check #2
+  # writes a second copy into .roundtrip.
+  if (( ${#fitted[@]} > 0 && batch_bytes + sz * 2 > budget )); then
+    deferred=$(( deferred + 1 ))
+    deferred_bytes=$(( deferred_bytes + sz ))
+    continue
+  fi
+
+  fitted+=("$f")
+  batch_bytes=$(( batch_bytes + sz * 2 ))
 done
 
-roundtrip_gb=$(( (archive_bytes + batch_bytes) / 1024 / 1024 / 1024 + 1 ))
+# A single file larger than the whole budget cannot be split any further. Say so
+# plainly and exit non-zero rather than looping: no amount of retrying will make
+# it fit, and the drain loop must not spin on it forever.
+if (( ${#fitted[@]} == 0 )); then
+  first_sz="$(stat -c %s "${batch[0]}" 2>/dev/null || echo 0)"
+  err "not enough space for even one file - refusing"
+  err "  free ${avail_gb} GiB, margin ${GUARD_MARGIN_GB} GiB, archive $(( archive_bytes / GIB )) GiB"
+  err "  smallest candidate needs $(( first_sz * 2 / GIB )) GiB (itself plus the Check #2 copy)"
+  err "  THIS WILL NOT RESOLVE ON RETRY. Free space on $STAGING_DIR, or"
+  err "  verify by message id so Check #2 stops re-downloading the archive."
+  exit 2
+fi
 
-log "free: ${avail_gb} GiB (margin ${GUARD_MARGIN_GB}, round-trip ~${roundtrip_gb})"
+batch=("${fitted[@]}")
 
-if (( avail_gb - roundtrip_gb < GUARD_MARGIN_GB )); then
-  err "would breach the ${GUARD_MARGIN_GB} GiB margin - refusing"
-  err "  Check #2 re-downloads the whole channel (~$(( archive_bytes / 1024 / 1024 / 1024 )) GiB)"
-  err "  plus this batch. Verifying by message id would remove this cost."
-  exit 1
+log "batch of ${#batch[@]} file(s), $(( batch_bytes / 2 / GIB )) GiB"
+log "free: ${avail_gb} GiB (margin ${GUARD_MARGIN_GB}, archive $(( archive_bytes / GIB )) GiB)"
+
+if (( deferred )); then
+  log "deferring $deferred file(s), $(( deferred_bytes / GIB )) GiB - they stay staged for the next pass"
 fi
 
 # Install the phase-clearing trap BEFORE the first write_phase, not beside the
@@ -208,9 +257,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Pass the BATCH explicitly, not the directory.
+#
+# Staging may now hold files this pass deliberately deferred for lack of space,
+# and re-hashing those would waste minutes per pass. A deferred file that has
+# not been fingerprinted yet would also fail Check #1 and abort a batch that is
+# otherwise fine.
 log "Check #1 - verifying staged batch"
 write_phase hashing "" 0 "${#batch[@]}"
-"$HERE/verify-batch.sh" "$STAGING_DIR"
+"$HERE/verify-batch.sh" "${batch[@]}"
 
 # Message ids emitted by the most recent successful upload_one, one per line.
 #
