@@ -28,24 +28,75 @@ jobs:
       - name: Ping the Supabase REST API
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # Either key name works. Projects created before Supabase's key
+          # migration have an `anon` JWT; newer ones show a publishable key
+          # (sb_publishable_...) and may not offer `anon` in the dashboard at
+          # all. Requiring one specific name sent a real session hunting a key
+          # that was not there to find.
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
         run: |
           set -euo pipefail
 
-          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
-            echo "SUPABASE_URL and SUPABASE_ANON_KEY repository secrets are not set."
-            echo "Add them in Settings > Secrets and variables > Actions."
-            echo "Without them this workflow cannot keep the project awake."
+          # Report each secret separately. Naming both together cannot
+          # distinguish "neither is set" from "one name has a typo", which cost
+          # three round trips on the sibling prune-metrics workflow. Lengths
+          # only, never values: a secret echoed into a public workflow log is
+          # leaked permanently.
+          KEY="${SUPABASE_ANON_KEY:-${SUPABASE_PUBLISHABLE_KEY:-}}"
+          missing=0
+
+          if [ -z "${SUPABASE_URL:-}" ]; then
+            echo "MISSING: SUPABASE_URL"
+            missing=1
+          else
+            echo "ok: SUPABASE_URL is set (${#SUPABASE_URL} chars)"
+          fi
+
+          if [ -z "$KEY" ]; then
+            echo "MISSING: SUPABASE_ANON_KEY (or SUPABASE_PUBLISHABLE_KEY)"
+            missing=1
+          else
+            echo "ok: publishable/anon key is set (${#KEY} chars)"
+          fi
+
+          if [ "$missing" -eq 1 ]; then
+            echo
+            echo "Add the missing secret(s) at:"
+            echo "  Settings > Secrets and variables > Actions > New repository secret"
+            echo
+            echo "Use the PUBLISHABLE key (sb_publishable_...) or the legacy anon"
+            echo "JWT - never the service-role or secret key. This workflow only"
+            echo "needs to prove the project answers; it reads nothing."
+            echo
+            echo "Without this the project pauses after 7 days of inactivity and"
+            echo "the document vault stops working, with no notification."
             exit 1
           fi
+
+          # Normalise the URL rather than failing on a paste artefact. A
+          # trailing slash builds "...supabase.co//rest/v1/..." and curl rejects
+          # it with "(3) Malformed input to a URL function" - which is exactly
+          # what happened to prune-metrics, from this same secret.
+          SUPABASE_URL="$(printf '%s' "$SUPABASE_URL" | tr -d ' \t\r\n')"
+          SUPABASE_URL="${SUPABASE_URL%/}"
+
+          case "$SUPABASE_URL" in
+            https://*) ;;
+            *)
+              echo "SUPABASE_URL does not start with https:// after trimming."
+              echo "Expected the project API URL, e.g. https://<ref>.supabase.co"
+              exit 1
+              ;;
+          esac
 
           # A HEAD against a table with RLS returns no rows to an anonymous
           # caller, which is the point: the request registers as activity
           # without exposing anything.
           status=$(curl -sS -o /dev/null -w '%{http_code}' \
             -X HEAD \
-            -H "apikey: ${SUPABASE_ANON_KEY}" \
-            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -H "apikey: ${KEY}" \
+            -H "Authorization: Bearer ${KEY}" \
             "${SUPABASE_URL}/rest/v1/metrics_samples?select=id&limit=1")
 
           echo "HTTP $status"
