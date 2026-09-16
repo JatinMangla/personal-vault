@@ -155,7 +155,18 @@ for f in "${files[@]}"; do
   hash_bytes=$(( hash_bytes + sz ))
 done
 if (( hash_bytes > 2000000000 )); then
-  log "hashing up to $(( hash_bytes / 1000000000 )) GB - expect ~$(( hash_bytes / 20000000 / 60 )) min at 20 MB/s over OTG"
+  # 15 MB/s, from a REAL multi-file prune, not a single-file benchmark.
+  #
+  # `dd` reading one file's opening 200 MB reported 20.4 MB/s, and an estimate
+  # built on that under-promised: a real 20.0 GB run across 8 files took 20.9
+  # minutes against the ~16 predicted. Hashing walks separate files scattered
+  # over the card, so it never sustains a sequential benchmark's best case.
+  #
+  # Measured 2026-09-16: 19,951,255,552 bytes in 1255 s = 15.9 MB/s.
+  # An estimate that runs long is worse than one that runs short - it is what
+  # makes a healthy script look hung, which cost this project a wrong hardware
+  # diagnosis. Round DOWN to 15 so the number quoted is beatable.
+  log "hashing up to $(( hash_bytes / 1000000000 )) GB - expect ~$(( hash_bytes / 15000000 / 60 )) min at 15 MB/s over OTG"
   log "  (it is reading the card, not stuck; Ctrl+C is safe - nothing is deleted until every file is checked)"
 fi
 
