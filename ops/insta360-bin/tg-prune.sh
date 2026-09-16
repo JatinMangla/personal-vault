@@ -118,6 +118,15 @@ case "$BATCH_DIR" in
   *) err "refusing: $BATCH_DIR is not a tg-batch folder"; exit 1 ;;
 esac
 
+# `timeout` bounds the hash of a file on a failing card. It ships in the same
+# coreutils package as sha256sum, so this normally passes - but without it the
+# hash below would fail for EVERY file rather than only unreadable ones, which
+# would look like a totally broken script rather than a missing package.
+command -v timeout >/dev/null || {
+  err "timeout missing - run: pkg install coreutils"
+  exit 1
+}
+
 command -v sha256sum >/dev/null || {
   err "sha256sum missing - run: pkg install coreutils"
   exit 1
@@ -163,6 +172,19 @@ fi
 archived=()
 fresh=()
 renamed=0
+unreadable=0
+
+# How long to allow a single hash before giving up on that file.
+#
+# A failing SD card does not return an error promptly - the kernel retries a
+# bad sector for a long time first, so the script simply appears to hang. On
+# 2026-09-16 a 5.9 GB file stalled the prune for over five minutes with no
+# output, which is indistinguishable from a crash to the operator.
+#
+# Generous enough for a healthy card: hashing reads at ~3.7 GB/min, so even a
+# 6 GB file finishes inside two minutes. Override for a slower reader:
+#   HASH_TIMEOUT=600 tg-prune --apply
+HASH_TIMEOUT="${HASH_TIMEOUT:-300}"
 
 for f in "${files[@]}"; do
   base="$(basename "$f")"
@@ -173,7 +195,35 @@ for f in "${files[@]}"; do
     continue
   fi
 
-  actual="$(sha256sum "$f" | cut -d' ' -f1)"
+  # An unreadable file must not abort the run, and must never be deleted.
+  #
+  # The original was a bare `sha256sum "$f"`: under `set -euo pipefail` an I/O
+  # error killed the whole prune mid-loop, and a retrying kernel hung it
+  # indefinitely. Either way the remaining files were never examined, so one
+  # bad sector blocked pruning everything else - including files that are
+  # perfectly readable and safely archived.
+  #
+  # `timeout` bounds the retry storm. Both failures land in the same place: the
+  # file is UNVERIFIED, so it is kept. Deleting a file whose content could not
+  # be read would be deleting on the strength of a filename alone, which is the
+  # exact mistake this script exists to prevent.
+  hash_rc=0
+  actual="$(timeout "$HASH_TIMEOUT" sha256sum "$f" 2>/dev/null | cut -d' ' -f1)" || hash_rc=$?
+
+  if (( hash_rc != 0 )) || [[ -z "$actual" ]]; then
+    if (( hash_rc == 124 )); then
+      err "UNREADABLE (timed out after ${HASH_TIMEOUT}s) - keeping: $base"
+      err "  the card may be failing in this region; the kernel is retrying"
+    else
+      err "UNREADABLE (I/O error) - keeping: $base"
+    fi
+    err "  this file is NOT deleted. If it is in the ledger it is already in"
+    err "  Telegram, verified; recover it with restore.sh"
+    unreadable=$(( unreadable + 1 ))
+    fresh+=("$f")
+    continue
+  fi
+
   if [[ "$actual" == "$recorded" ]]; then
     archived+=("$f")
   else
@@ -187,6 +237,17 @@ echo
 log "already archived : ${#archived[@]}"
 log "still to upload  : ${#fresh[@]}"
 (( renamed )) && log "name reused      : $renamed (kept - content differs)"
+
+if (( unreadable )); then
+  log "unreadable       : $unreadable (kept - could not be verified)"
+  echo
+  err "$unreadable file(s) could not be read from the card."
+  err "That is a HARDWARE signal, not a script fault. Check the cable first,"
+  err "then test one file directly:"
+  err "  dd if=<path> of=/dev/null bs=1M count=200"
+  err "If reads keep failing, stop recording to this card and copy what you"
+  err "can off it. Anything already in the ledger is safe in Telegram."
+fi
 
 if (( ${#archived[@]} == 0 )); then
   log "nothing to prune - connect the card and sync"
