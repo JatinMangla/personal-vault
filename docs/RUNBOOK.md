@@ -309,8 +309,31 @@ to a `tg-archived/` sibling instead of deleting.)
 **This is where the real saving is.** The VM-side check below prevents a
 duplicate reaching Telegram, but by then the file has already crossed the cable
 at ~12 MB/s with the phone tethered and draining. Pruning first means those
-bytes never move at all. Hashing reads at ~3.7 GB/min — about 170x faster than
-sending the same data — so checking always costs less than transferring.
+bytes never move at all.
+
+**The margin is narrower than it looks.** Hashing reads the card at
+**20.4 MB/s** — measured with `dd` over OTG on 2026-09-16 — which is about
+1.2 GB/min, not the ~3.7 GB/min this section used to claim. That figure was
+Syncthing's *scan* rate, and `ops/insta360-bin/tg-prune.sh` records a real bug
+caused by conflating the two: a timeout sized from the scan rate would have
+aborted precisely the large files it was meant to protect.
+
+So against a ~12 MB/s transfer, hashing is under **2x** faster, not 170x.
+Pruning still wins — it saves the transfer *and* the battery drain of staying
+tethered, and a file never sent is a file that cannot fail mid-transfer — but
+it wins by a sensible margin rather than a free one.
+
+**Prune after each drain, not when the card fills.** The cost scales with
+whatever is sitting in `tg-batch`, so pruning while only the newest batch is
+there costs minutes; letting several batches accumulate means re-hashing all of
+them. This is the single largest saving available and it needs no flags — just
+the habit of running it when a drain finishes.
+
+Since 2026-09-16 the dry run **offers to continue** when run interactively:
+it prints the list, asks, and on `y` deletes without re-reading the card. Both
+passes did identical hashing before that, so a careful operator paid ~31
+minutes for an 18.8 GB batch instead of ~15. A piped or scripted run still
+exits without deleting.
 
 It compares by name first and only hashes when a name matches, so a reused
 filename with new footage is kept, not mistaken for an upload that already

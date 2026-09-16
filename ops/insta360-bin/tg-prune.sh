@@ -309,13 +309,58 @@ if (( ! APPLY )); then
   log "DRY RUN - nothing changed. These are already in Telegram:"
   for f in "${archived[@]}"; do echo "    $(basename "$f")"; done
   echo
-  if (( KEEP )); then
-    log "run 'tg-prune --apply --keep' to move them to $DONE_DIR"
+
+  # Offer to continue rather than throwing the work away.
+  #
+  # The dry run and --apply do IDENTICAL work up to this point: both hash every
+  # name-matched file to build "archived". Exiting here meant the operator ran
+  # the whole thing twice for one prune - 31 minutes instead of 15 on an 18.8 GB
+  # batch, because the card reads at 20.4 MB/s and nothing about that is going
+  # to change. The hashing IS the safety; doing it twice is not twice as safe.
+  #
+  # The preview still happens first, which is the point of the dry run. The only
+  # thing removed is the second read of the same bytes.
+  #
+  # `[[ -t 0 ]]` is load-bearing: a piped or scripted invocation has no human to
+  # answer, and must never delete on a default. Those keep the old behaviour of
+  # printing the list and exiting. `read` is given an explicit </dev/tty so the
+  # prompt still works when stdout is redirected to a log.
+  if [[ -t 0 ]]; then
+    if (( KEEP )); then
+      printf '  move these %d file(s) to tg-archived now? [y/N] ' "${#archived[@]}"
+    else
+      printf '  delete these %d file(s) from tg-batch now? [y/N] ' "${#archived[@]}"
+    fi
+
+    reply=""
+    read -r reply </dev/tty || reply=""
+
+    case "$reply" in
+      y|Y|yes|YES)
+        log "proceeding - the files above are already verified, not re-hashing"
+        APPLY=1
+        ;;
+      *)
+        echo
+        log "nothing changed."
+        if (( KEEP )); then
+          log "run 'tg-prune --apply --keep' to move them to $DONE_DIR"
+        else
+          log "run 'tg-prune --apply' to delete them from tg-batch"
+          log "  each one is verified present in Telegram before it is removed"
+        fi
+        exit 0
+        ;;
+    esac
   else
-    log "run 'tg-prune --apply' to delete them from tg-batch"
-    log "  each one is verified present in Telegram before it is removed"
+    if (( KEEP )); then
+      log "run 'tg-prune --apply --keep' to move them to $DONE_DIR"
+    else
+      log "run 'tg-prune --apply' to delete them from tg-batch"
+      log "  each one is verified present in Telegram before it is removed"
+    fi
+    exit 0
   fi
-  exit 0
 fi
 
 echo
