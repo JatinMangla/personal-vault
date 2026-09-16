@@ -20,7 +20,10 @@
 # Run:  bash ops/insta360-bin/test-batch-split.sh
 set -uo pipefail
 set -uo pipefail
-GIB=1
+
+# Sizes below are plain numbers standing in for GiB - the ratios are what the
+# fitting logic cares about, and small integers keep the expected values
+# readable. The real code works in bytes.
 
 fit() {
   local avail=$1 margin=$2 archive=$3; shift 3
