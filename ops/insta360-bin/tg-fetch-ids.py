@@ -14,7 +14,10 @@ re-downloaded everything ever archived on every batch:
 On 2026-09-15 that cost a real drain more than three hours, filled the boot
 volume once, and made an interrupted batch re-upload 18.8 GB from scratch.
 
-`telegram-upload --print-file-id` emits each message id at upload time. This
+Message ids come from tg-resolve-ids.py, which asks Telegram directly after an
+upload. An earlier design scraped `telegram-upload --print-file-id`, but that
+flag emits a Bot API file_id rather than a message id - see tg-resolve-ids.py.
+This
 script fetches back only those ids, so Check #2 costs the size of the BATCH
 rather than the size of the ARCHIVE, and stops growing forever.
 

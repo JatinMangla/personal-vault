@@ -267,58 +267,20 @@ log "Check #1 - verifying staged batch"
 write_phase hashing "" 0 "${#batch[@]}"
 "$HERE/verify-batch.sh" "${batch[@]}"
 
-# Message ids emitted by the most recent successful upload_one, one per line.
-#
-# A split file produces SEVERAL ids - one per part - so this is a list, not a
-# scalar. Check #2 fetches back exactly these, which is what makes verification
-# cost the size of the batch rather than the size of the whole archive.
-LAST_UPLOAD_IDS=""
-
-# Pull message ids out of telegram-upload's output.
-#
-# ANCHORED, not permissive. The first draft accepted any run of >= 5 digits
-# bounded by non-digits, and a fixture test immediately caught why that is
-# unsafe: `VID_20260210_061658_00_135.insv` yields "20260210", because an
-# underscore is a non-digit boundary. telegram-upload echoes filenames, so
-# Check #2 would then have fetched a message id harvested from a date - the
-# silently-WRONG id that is far worse than a missing one, since a missing id
-# only triggers the slow fallback while a wrong one fetches the wrong bytes.
-#
-# So an id must be either the entire line, or follow an explicit label on a
-# line that contains nothing else numeric. Anything embedded in a filename,
-# a size, a percentage or a progress counter is rejected. A format this does
-# not recognise yields nothing, which degrades to the full-channel download -
-# correct, just slower.
-extract_ids() {
-  printf '%s\n' "$1" | sed -E '
-    s/^[[:space:]]+//; s/[[:space:]]+$//
-    s/^([Ff]ile[[:space:]]+)?[Ii][Dd][[:space:]]*[:=][[:space:]]*//
-    s/^.*[[:space:]]file[[:space:]]+id[[:space:]]+//
-  ' | grep -xE '[0-9]{5,}' || true
-}
-
 upload_one() {
   local file="$1" attempt=0 max=8 out rc wait_s
-  LAST_UPLOAD_IDS=""
 
   while (( attempt < max )); do
     attempt=$((attempt + 1))
     set +e
-    out="$(telegram-upload --to "$TG_CHANNEL" --config "$TG_CONFIG" --large-files split --no-thumbnail --print-file-id "$file" 2>&1)"
+    # No --print-file-id. It emits a Bot API file_id, not a message id, so it
+    # bought nothing; ids are resolved after the batch by asking Telegram.
+    out="$(telegram-upload --to "$TG_CHANNEL" --config "$TG_CONFIG" --large-files split --no-thumbnail "$file" 2>&1)"
     rc=$?
     set -e
 
     if (( rc == 0 )); then
       (( attempt > 1 )) && log "  succeeded on attempt $attempt"
-      LAST_UPLOAD_IDS="$(extract_ids "$out")"
-      if [[ -z "$LAST_UPLOAD_IDS" ]]; then
-        # Not fatal. Check #2 falls back to downloading the whole channel for
-        # any file without ids, exactly as it did before this change - slower,
-        # but the integrity guarantee is identical. A silent WRONG id would be
-        # far worse than a missing one.
-        err "  no message id captured for $(basename "$file")"
-        err "  Check #2 will fall back to a full-channel download for this batch"
-      fi
       return 0
     fi
 
@@ -358,15 +320,48 @@ for f in "${batch[@]}"; do
   write_phase uploading "$(basename "$f")" "$upload_index" "${#batch[@]}"
   upload_one "$f"
 
-  base="$(basename "$f")"
-  if [[ -n "$LAST_UPLOAD_IDS" ]]; then
-    # Flatten to one space-separated line; a split file contributes several.
-    BATCH_IDS["$base"]="$(printf '%s' "$LAST_UPLOAD_IDS" | tr '\n' ' ' | sed 's/ *$//')"
-    log "  message id(s): ${BATCH_IDS[$base]}"
-  else
-    ids_complete=0
-  fi
 done
+
+# Resolve message ids by ASKING TELEGRAM, not by parsing CLI output.
+#
+# The previous approach scraped `--print-file-id`, which emits a Bot API
+# file_id (BQADBQADmiMAAss5WVXcwHLblCIghQI) rather than a message id. The
+# parser matched nothing, every file logged "no message id captured", and every
+# Check #2 fell back to a full-channel download - which cost an 11-hour drain
+# on 2026-09-17. See tg-resolve-ids.py for why a file_id cannot substitute.
+#
+# Done once for the whole batch rather than per file: one channel walk instead
+# of N, and the resolver takes the newest id per name, which is what makes it
+# correct in the presence of the 13 duplicate filenames already in the channel.
+RESOLVER="$HERE/tg-resolve-ids.py"
+PIPX_PY="${PIPX_PY:-$HOME/.local/share/pipx/venvs/telegram-upload/bin/python}"
+[[ -x "$PIPX_PY" ]] || PIPX_PY="$(command -v python3 || true)"
+
+if [[ -r "$RESOLVER" && -n "$PIPX_PY" ]]; then
+  batch_names=()
+  for f in "${batch[@]}"; do batch_names+=("$(basename "$f")"); done
+
+  log "resolving message ids for ${#batch_names[@]} file(s)"
+  resolved_out=""
+  if resolved_out="$("$PIPX_PY" "$RESOLVER" --config "$TG_CONFIG" \
+                       --channel "$TG_CHANNEL" "${batch_names[@]}" 2>/dev/null)"; then
+    while IFS=$'\t' read -r rname rids; do
+      [[ -n "$rname" && -n "$rids" ]] || continue
+      BATCH_IDS["$rname"]="$rids"
+      log "  $rname -> $rids"
+    done <<< "$resolved_out"
+  fi
+
+  for bn in "${batch_names[@]}"; do
+    if [[ -z "${BATCH_IDS[$bn]:-}" ]]; then
+      err "could not resolve a message id for $bn"
+      ids_complete=0
+    fi
+  done
+else
+  err "tg-resolve-ids.py not usable - Check #2 will download the whole channel"
+  ids_complete=0
+fi
 
 manifest_copy="$WORK_DIR/manifest-$(date -u +%Y%m%dT%H%M%SZ).sha256"
 cp "$MANIFEST" "$manifest_copy"

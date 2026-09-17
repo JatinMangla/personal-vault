@@ -145,9 +145,9 @@ jobs:
         # failures are silent, so the arithmetic is pinned by fixtures.
         run: bash ops/insta360-bin/test-batch-split.sh
 
-      - name: Message-id parser fixtures
-        # extract_ids() in tg-upload.sh decides which Telegram message Check #2
-        # fetches back. A WRONG id fetches the wrong bytes; the first draft
-        # turned VID_20260210_061658_00_135.insv into message id 20260210.
-        # These fixtures must stay in sync with the parser they mirror.
-        run: bash ops/insta360-bin/test-extract-ids.sh
+      - name: Message-id resolver fixtures
+        # tg-resolve-ids.py decides which Telegram message Check #2 fetches
+        # back. A WRONG id fetches the wrong bytes, and the channel contains
+        # duplicate filenames from interrupted drains, so newest-wins and the
+        # split-part grouping are the two rules that must not regress.
+        run: python3 ops/insta360-bin/test-resolve-ids.py
