@@ -124,10 +124,29 @@ def main():
             ids = sorted(found[name].values())
             print(f"{name}\t{' '.join(str(i) for i in ids)}")
 
+    # Partial resolution EXITS 0, deliberately.
+    #
+    # This used to exit 1 whenever any name was unresolved, after having already
+    # printed the names it DID resolve. tg-upload.sh captured the run as
+    # `if resolved_out="$(...)"`, so a non-zero status skipped the parse loop
+    # entirely and threw away every id that had resolved correctly. One
+    # unresolvable name therefore sent the WHOLE batch down the full-channel
+    # download path.
+    #
+    # Exit status now means "could the resolver do its job at all" - a missing
+    # config, an unreachable Telegram, a bad channel - and those already exit 2
+    # via fail(). Per-name completeness is the CALLER's judgement, made from the
+    # ids actually printed, which is the only thing that can be acted on
+    # per-file. Unresolved names still go to stderr so they stay visible in the
+    # journal.
     if missing:
         for n in missing:
             print(f"ERROR: no message found for {n}", file=sys.stderr)
-        fail(f"{len(missing)} of {len(args.names)} name(s) unresolved", 1)
+        print(
+            f"WARNING: {len(missing)} of {len(args.names)} name(s) unresolved; "
+            f"{len(found)} resolved and printed",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

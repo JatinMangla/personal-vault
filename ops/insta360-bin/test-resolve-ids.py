@@ -111,6 +111,64 @@ check(
 )
 check("empty channel", resolve([], ["A.insv"]), {})
 
+# ---------------------------------------------------------------------------
+# PARTIAL RESOLUTION - the bug that cost the batch its ids
+#
+# The resolver prints what it resolved, then reports what it could not. It used
+# to exit 1 in that case, and tg-upload.sh captured it as
+# `if resolved_out="$(...)"` - so a non-zero status skipped the parse loop and
+# discarded ids that HAD resolved. One unresolvable name sent the whole batch
+# down the full-channel download path.
+#
+# The contract these fixtures pin:
+#   stdout        - one line per RESOLVED name, always, even when some fail
+#   exit status   - 0 when the resolver ran, whether or not every name resolved
+#                   (non-zero is reserved for "could not reach Telegram at all")
+#   completeness  - the CALLER's job, judged from the ids actually printed
+print("resolve - partial resolution:")
+
+# B.insv is not in the channel. A.insv must still be returned.
+check(
+    "resolved names survive an unresolved sibling",
+    resolve([(8, "A.insv")], ["A.insv", "B.insv"]),
+    {"A.insv": [8]},
+)
+check(
+    "one resolved out of three",
+    resolve([(12, "B.insv")], ["A.insv", "B.insv", "C.insv"]),
+    {"B.insv": [12]},
+)
+# A split file whose parts landed while a plain sibling did not.
+check(
+    "split resolves while sibling is missing",
+    resolve([(21, "A.insv.01"), (20, "A.insv.00")], ["A.insv", "Z.insv"]),
+    {"A.insv": [20, 21]},
+)
+
+
+def caller_ids(resolved, requested):
+    """What tg-upload.sh ends up with: BATCH_IDS, and ids_complete.
+
+    Mirrors the shell - parse every printed line into BATCH_IDS, THEN judge
+    completeness per file. The old shell threw `resolved` away entirely when
+    the resolver exited non-zero; this asserts the ids survive.
+    """
+    batch_ids = {n: ids for n, ids in resolved.items()}
+    complete = 1 if all(n in batch_ids for n in requested) else 0
+    return batch_ids, complete
+
+
+ids, complete = caller_ids(resolve([(8, "A.insv")], ["A.insv", "B.insv"]),
+                           ["A.insv", "B.insv"])
+check("caller keeps the resolved id on a partial batch", ids, {"A.insv": [8]})
+check("caller marks the batch incomplete", complete, 0)
+
+ids, complete = caller_ids(
+    resolve([(9, "B.insv"), (8, "A.insv")], ["A.insv", "B.insv"]),
+    ["A.insv", "B.insv"],
+)
+check("caller marks a full batch complete", complete, 1)
+
 print()
 print(f"passed={PASS} failed={FAIL}")
 sys.exit(1 if FAIL else 0)

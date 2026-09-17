@@ -360,15 +360,31 @@ if [[ -r "$RESOLVER" && -n "$PIPX_PY" ]]; then
   for f in "${batch[@]}"; do batch_names+=("$(basename "$f")"); done
 
   log "resolving message ids for ${#batch_names[@]} file(s)"
+  #
+  # CONSUME STDOUT REGARDLESS OF EXIT STATUS.
+  #
+  # This was `if resolved_out="$(...)"`, which skipped the parse loop whenever
+  # the resolver exited non-zero - and the resolver used to exit 1 on PARTIAL
+  # resolution, after printing the ids it had already found. So a single
+  # unresolvable name discarded every id in the batch and sent Check #2 down
+  # the full-channel download path. The resolver now exits 0 on partial
+  # success, but this side no longer depends on that: it parses what was
+  # printed either way, and the completeness check below judges per-file from
+  # BATCH_IDS, which is the only thing that can be acted on per-file.
+  #
+  # The resolver's stderr is NOT discarded: it names each unresolved file,
+  # and that is the difference between "Check #2 was slow" and knowing which
+  # file made it slow. Only stdout is captured, so the two cannot mix.
   resolved_out=""
-  if resolved_out="$("$PIPX_PY" "$RESOLVER" --config "$TG_CONFIG" \
-                       --channel "$TG_CHANNEL" "${batch_names[@]}" 2>/dev/null)"; then
-    while IFS=$'\t' read -r rname rids; do
-      [[ -n "$rname" && -n "$rids" ]] || continue
-      BATCH_IDS["$rname"]="$rids"
-      log "  $rname -> $rids"
-    done <<< "$resolved_out"
-  fi
+  resolved_out="$("$PIPX_PY" "$RESOLVER" --config "$TG_CONFIG" \
+                    --channel "$TG_CHANNEL" "${batch_names[@]}")" \
+    || err "id resolver exited non-zero - using whatever ids it did print"
+
+  while IFS=$'\t' read -r rname rids; do
+    [[ -n "$rname" && -n "$rids" ]] || continue
+    BATCH_IDS["$rname"]="$rids"
+    log "  $rname -> $rids"
+  done <<< "$resolved_out"
 
   for bn in "${batch_names[@]}"; do
     if [[ -z "${BATCH_IDS[$bn]:-}" ]]; then
