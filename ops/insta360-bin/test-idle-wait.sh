@@ -58,7 +58,13 @@ STUB="notanumber idle"; sync_is_done; ck "non-numeric needBytes"       "$?" "1"
 STUB="0";               sync_is_done; ck "truncated reply"             "$?" "1"
 
 echo "idle_wait - shortens ONLY on a positive idle:"
+# These ARE used - idle_wait() reads both - but it arrives through the eval
+# above, which shellcheck cannot follow, so it sees two dead assignments.
+# Scoped to these two lines with the reason, rather than disabling SC2034 for
+# the file: a real unused variable later should still be reported.
+# shellcheck disable=SC2034
 IDLE_WAIT_SECONDS=6
+# shellcheck disable=SC2034
 IDLE_POLL_SECONDS=1
 
 STUB="0 idle"
