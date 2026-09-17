@@ -257,6 +257,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# EXIT alone does not cover a killed run.
+#
+# `systemctl stop tg-archive` sends SIGTERM to the whole cgroup. bash running a
+# foreground child does not run its EXIT trap until that child reaps, and if
+# the shell itself is killed the trap never fires at all - so the round-trip
+# directory is orphaned. On 2026-09-17 that left 93 GB of scratch behind on a
+# 147 GB volume, taking it to 91% full, and the operator had to find and remove
+# it by hand.
+#
+# This matters more than it looks: "systemctl stop tg-archive (safe at any
+# point)" is advice this project prints in its own logs and documentation. It
+# must not mean "and then go hunting for tens of gigabytes".
+#
+# Trapping these re-raises through the EXIT handler, which removes rt_dir.
+trap 'cleanup; exit 143' TERM
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 129' HUP
+
 # Pass the BATCH explicitly, not the directory.
 #
 # Staging may now hold files this pass deliberately deferred for lack of space,
@@ -387,6 +405,30 @@ write_phase downloading "" 0 "${#batch[@]}"
 ROUNDTRIP_BASE="${ROUNDTRIP_BASE:-$STAGING_DIR/.roundtrip}"
 mkdir -p "$ROUNDTRIP_BASE"
 
+# Sweep scratch left by a run that was killed before its trap could fire.
+#
+# Belt and braces with the signal traps above: a SIGKILL, an OOM kill or a
+# power loss leaves a directory behind regardless of what this script traps.
+# Without this sweep that space is never reclaimed, and the next run's disk
+# guard sees a volume that looks full for no visible reason.
+#
+# Each round trip lives in a directory named for its PID, so anything here
+# whose PID is not running is finished with. Checked with kill -0 rather than
+# by age: a long Check #2 legitimately runs for hours, and a time-based sweep
+# would delete the scratch of a healthy concurrent run.
+shopt -s nullglob
+for stale in "$ROUNDTRIP_BASE"/*; do
+  [[ -d "$stale" ]] || continue
+  stale_pid="$(basename "$stale")"
+  [[ "$stale_pid" =~ ^[0-9]+$ ]] || continue
+  if ! kill -0 "$stale_pid" 2>/dev/null; then
+    stale_size="$(du -sh "$stale" 2>/dev/null | cut -f1)"
+    log "removing stale round-trip scratch from PID $stale_pid (${stale_size:-unknown})"
+    rm -rf "$stale"
+  fi
+done
+shopt -u nullglob
+
 # HARD GUARD: refuse to run if the round trip would land on the root
 # filesystem.
 #
@@ -413,6 +455,67 @@ rt_dir="$ROUNDTRIP_BASE/$$"
 mkdir -p "$rt_dir"
 
 roundtrip_ok=1
+
+# Abort Check #2 if the scratch directory outgrows what it could legitimately
+# need, and watch the volume while it runs.
+#
+# On 2026-09-17 a full-channel download of a 41 GB archive produced 93 GB of
+# scratch and drove a 147 GB volume to 91% full - almost certainly because an
+# interrupted fetch restarted rather than resumed, accumulating duplicate
+# copies. Nothing noticed: the disk guard runs once BEFORE the download and
+# never looks again, so a runaway inside Check #2 was invisible until the
+# volume was nearly full.
+#
+# Immich shares this disk. A full volume is a worse outcome than a failed
+# verification, and a failed verification is safe - staging is never cleared
+# unless Check #2 passes.
+roundtrip_watch() {
+  local ceiling_bytes="$1" pid="$2" used
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 60
+    used="$(du -sb "$rt_dir" 2>/dev/null | cut -f1)"
+    [[ "$used" =~ ^[0-9]+$ ]] || continue
+
+    if (( used > ceiling_bytes )); then
+      err "Check #2 scratch has reached $(( used / 1024 / 1024 / 1024 )) GiB,"
+      err "  past the $(( ceiling_bytes / 1024 / 1024 / 1024 )) GiB it should ever need - aborting the download"
+      kill "$pid" 2>/dev/null
+      return 1
+    fi
+
+    # Independent of the ceiling: never let the volume itself run out.
+    local avail
+    avail="$(df -P "$rt_dir" | awk 'NR==2{print $4}')"
+    if [[ "$avail" =~ ^[0-9]+$ ]] && (( avail / 1024 / 1024 < 5 )); then
+      err "media volume below 5 GiB free - aborting Check #2 before it fills"
+      kill "$pid" 2>/dev/null
+      return 1
+    fi
+  done
+}
+
+# Twice the archive plus this batch, with a floor so a small archive still has
+# room. Generous: a correct full-channel download needs archive+batch once, so
+# reaching double means something is re-fetching rather than resuming.
+rt_ceiling=$(( (archive_bytes + batch_bytes / 2) * 2 ))
+(( rt_ceiling < 20 * GIB )) && rt_ceiling=$(( 20 * GIB ))
+
+# Run telegram-download under the watchdog. Returns non-zero if the download
+# failed OR the watchdog aborted it.
+full_channel_download() {
+  local dl_pid watch_rc=0
+  ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ) &
+  dl_pid=$!
+
+  roundtrip_watch "$rt_ceiling" "$dl_pid" || watch_rc=1
+
+  wait "$dl_pid" 2>/dev/null || true
+  if (( watch_rc )); then
+    err "Check #2 aborted - staging is NOT cleared and nothing is deleted"
+    return 1
+  fi
+  return 0
+}
 
 # Fetch back ONLY this batch's messages, when every file in it reported ids.
 #
@@ -451,19 +554,14 @@ if [[ -n "${fetch_ids// /}" ]]; then
            --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
            $fetch_ids >/dev/null ); then
     err "fetch by message id failed - falling back to a full-channel download"
-    if ! ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ); then
-      err "could not download the channel back"
-      roundtrip_ok=0
-    fi
+    full_channel_download || roundtrip_ok=0
   fi
 else
   (( ids_complete )) || err "some files reported no message id - using a full-channel download"
   [[ -r "$FETCHER" ]] || err "tg-fetch-ids.py not found beside this script - using a full-channel download"
   log "Check #2 - downloading the whole channel back (slower; grows with the archive)"
-  if ! ( cd "$rt_dir" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep >/dev/null 2>&1 ); then
-    err "could not download the channel back"
-    roundtrip_ok=0
-  fi
+  log "  watching scratch, ceiling $(( rt_ceiling / GIB )) GiB"
+  full_channel_download || roundtrip_ok=0
 fi
 
 if (( roundtrip_ok )); then
