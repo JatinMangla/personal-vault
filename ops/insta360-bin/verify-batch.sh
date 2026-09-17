@@ -58,6 +58,22 @@ fi
 
 log "verifying ${#files[@]} file(s) against $(basename "$MANIFEST")"
 
+# Publish the hashes computed here, so the ledger write at the end of
+# tg-upload.sh does not have to read every file a second time. Same format as
+# the manifest ("<sha256>  <basename>"), so the same awk reads both.
+#
+# Opt-in: only written when the caller sets HASH_FILE. Running this script by
+# hand is unaffected. A write failure is NOT fatal - the consumer falls back to
+# hashing, so losing this file costs time, never correctness.
+hash_out=""
+if [[ -n "${HASH_FILE:-}" ]]; then
+  if : > "$HASH_FILE" 2>/dev/null; then
+    hash_out="$HASH_FILE"
+  else
+    err "cannot write HASH_FILE=$HASH_FILE - the ledger will re-hash instead"
+  fi
+fi
+
 fail=0
 checked=0
 
@@ -79,6 +95,15 @@ for f in "${files[@]}"; do
 
   if [[ "$actual" == "$expected" ]]; then
     checked=$((checked + 1))
+    # Only VERIFIED hashes are published. A mismatched file must never leave
+    # a hash behind for the ledger to trust.
+    #
+    # `if`, not `[[ ... ]] && printf`: under `set -e` that form makes the loop
+    # body exit non-zero on the last iteration whenever hash_out is empty,
+    # which would fail a verification that had in fact passed.
+    if [[ -n "$hash_out" ]]; then
+      printf '%s  %s\n' "$actual" "$base" >> "$hash_out"
+    fi
   else
     err "MISMATCH: $base"
     err "  expected $expected"

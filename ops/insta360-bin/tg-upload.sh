@@ -253,6 +253,7 @@ fi
 # later and the guard below tolerates that.
 cleanup() {
   [[ -n "${rt_dir:-}" ]] && rm -rf "$rt_dir"
+  [[ -n "${BATCH_HASHES:-}" ]] && rm -f "$BATCH_HASHES"
   write_phase "" "" 0 0
 }
 trap cleanup EXIT
@@ -283,7 +284,15 @@ trap 'cleanup; exit 129' HUP
 # otherwise fine.
 log "Check #1 - verifying staged batch"
 write_phase hashing "" 0 "${#batch[@]}"
-"$HERE/verify-batch.sh" "${batch[@]}"
+
+# Capture the hashes Check #1 computes, so the ledger write at the end of this
+# script does not read every file a second time. PID-scoped, on the work
+# volume, and removed by cleanup() on every exit path including SIGTERM.
+#
+# Check #1 is authoritative here: it is the pass that compares against the
+# manifest, and a file that fails it never reaches the ledger at all.
+BATCH_HASHES="$WORK_DIR/batch-hashes.$$"
+HASH_FILE="$BATCH_HASHES" "$HERE/verify-batch.sh" "${batch[@]}"
 
 upload_one() {
   local file="$1" attempt=0 max=8 out rc wait_s
@@ -441,6 +450,21 @@ for stale in "$ROUNDTRIP_BASE"/*; do
     stale_size="$(du -sh "$stale" 2>/dev/null | cut -f1)"
     log "removing stale round-trip scratch from PID $stale_pid (${stale_size:-unknown})"
     rm -rf "$stale"
+  fi
+done
+
+# Same sweep for the Check #1 hash files, for the same reason: cleanup() removes
+# them on every trapped exit, but SIGKILL and OOM run no traps. These are a few
+# hundred bytes rather than gigabytes, so this is tidiness rather than a disk
+# guard - but an unswept work directory is where stale state accumulates
+# unnoticed, and the PID test is already written.
+for stale in "$WORK_DIR"/batch-hashes.*; do
+  [[ -f "$stale" ]] || continue
+  stale_pid="${stale##*.}"
+  [[ "$stale_pid" =~ ^[0-9]+$ ]] || continue
+  if ! kill -0 "$stale_pid" 2>/dev/null; then
+    log "removing stale batch hashes from PID $stale_pid"
+    rm -f "$stale"
   fi
 done
 shopt -u nullglob
@@ -637,10 +661,37 @@ write_phase clearing "" 0 "${#batch[@]}"
 # re-send files already in Telegram, and tg-archive status would under-count.
 # That is exactly how the first uploaded file came to be invisible.
 #
+# Reuse Check #1's hash rather than reading every file again.
+#
+# Check #1 hashed each of these files against the manifest, and nothing can
+# have changed since: this script holds the flock for its whole run, and
+# staging is cleared a few lines below. The previous comment here argued the
+# re-read was free because the file was "already in page cache" - but Check
+# #2's multi-gigabyte download sits between the two, and will have evicted it.
+# The read is real, and costs a full pass over the batch (~13 min per 27 GiB).
+#
+# Falls back to hashing when the entry is missing or malformed. A lost
+# optimisation must never become a lost or wrong ledger row - the ledger is
+# what tg-prune.sh consults before deleting originals from the card.
+ledger_hash() {
+  local file="$1" base="$2" h=""
+  if [[ -n "${BATCH_HASHES:-}" && -r "${BATCH_HASHES:-}" ]]; then
+    h="$(awk -v want="$base" '
+      { n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n)
+        if (n == want) { print $1; exit } }
+    ' "$BATCH_HASHES")"
+  fi
+  if [[ "$h" =~ ^[0-9a-f]{64}$ ]]; then
+    printf '%s' "$h"
+  else
+    err "no Check #1 hash for $base - re-hashing"
+    sha256sum "$file" | cut -d' ' -f1
+  fi
+}
+
 # Hash the verified file rather than copying the manifest's entry. The manifest
 # says what SHOULD be there; this file just proved what IS there, having gone
-# to Telegram and come back byte-identical. Recording the stronger fact costs
-# one read of a file already in page cache.
+# to Telegram and come back byte-identical.
 for f in "${batch[@]}"; do
   base="$(basename "$f")"
   if ! grep -qF " $base" "$UPLOADED_LOG" 2>/dev/null; then
@@ -664,7 +715,7 @@ for f in "${batch[@]}"; do
     # have three fields and no ids, which readers must treat as "unknown", the
     # same rule the size column already established.
     printf '%s %s %s %s\n' \
-      "$(sha256sum "$f" | cut -d' ' -f1)" "$base" "$(stat -c %s "$f")" \
+      "$(ledger_hash "$f" "$base")" "$base" "$(stat -c %s "$f")" \
       "${BATCH_IDS[$base]:--}" \
       >> "$UPLOADED_LOG"
   fi

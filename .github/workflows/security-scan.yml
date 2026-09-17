@@ -145,6 +145,15 @@ jobs:
         # failures are silent, so the arithmetic is pinned by fixtures.
         run: bash ops/insta360-bin/test-batch-split.sh
 
+      - name: Ledger hash-reuse fixtures
+        # ledger_hash() reuses the hash Check #1 computed instead of reading
+        # every file again. The ledger is what tg-prune.sh checks before
+        # deleting originals from the card, so a wrong hash there is the one
+        # mistake with no recovery. These pin that every malformed, missing or
+        # absent entry falls back to hashing rather than recording anything
+        # else - the speed change must be indistinguishable from the slow path.
+        run: bash ops/insta360-bin/test-ledger-hash.sh
+
       - name: Message-id resolver fixtures
         # tg-resolve-ids.py decides which Telegram message Check #2 fetches
         # back. A WRONG id fetches the wrong bytes, and the channel contains
