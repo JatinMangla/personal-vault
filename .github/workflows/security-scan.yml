@@ -154,6 +154,15 @@ jobs:
         # else - the speed change must be indistinguishable from the slow path.
         run: bash ops/insta360-bin/test-ledger-hash.sh
 
+      - name: Idle-wait fixtures
+        # idle_wait() ends a drain's trailing wait early when Syncthing reports
+        # nothing left to deliver. Waiting too long costs minutes; stopping too
+        # early ends a drain with files still on the card, which looks identical
+        # to a healthy finish from inside the loop. These pin that ONLY a
+        # positive "needBytes 0 / state idle" shortens the wait, and that
+        # unreachable, mid-transfer and unparsable all wait the full window.
+        run: bash ops/insta360-bin/test-idle-wait.sh
+
       - name: Message-id resolver fixtures
         # tg-resolve-ids.py decides which Telegram message Check #2 fetches
         # back. A WRONG id fetches the wrong bytes, and the channel contains

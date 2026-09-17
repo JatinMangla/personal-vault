@@ -69,6 +69,79 @@ IDLE_WAIT_SECONDS="${IDLE_WAIT_SECONDS:-300}"
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }
 
+# --- Syncthing-aware idle wait --------------------------------------------
+#
+# The loop below ends a drain after two consecutive empty passes, and each pass
+# slept IDLE_WAIT_SECONDS (300) unconditionally. So every drain finished with up
+# to 10 minutes of pure waiting, whether or not anything was still coming.
+#
+# Syncthing already knows the answer. tg-go.sh reads it before starting a drain;
+# this reads the same endpoint at the same two decision points, so the loop can
+# stop as soon as the phone has nothing left to send.
+#
+# Kept deliberately conservative: this only ever SHORTENS the wait when
+# Syncthing positively reports idle with nothing pending. Unreachable, unparsable
+# or still-transferring all fall through to the full sleep, because a drain that
+# ends early leaves files unarchived, while one that waits too long only costs
+# minutes. The manifest check after the loop is what actually decides whether
+# the drain was complete, and it is unchanged.
+SYNCTHING_CONFIG="${SYNCTHING_CONFIG:-/home/ubuntu/.local/state/syncthing/config.xml}"
+SYNCTHING_URL="${SYNCTHING_URL:-http://127.0.0.1:8384}"
+SYNC_FOLDER="${SYNC_FOLDER:-dub20-7j8sw}"
+
+sync_key() {
+  [[ -r "$SYNCTHING_CONFIG" ]] || return 0
+  grep -o '<apikey>[^<]*</apikey>' "$SYNCTHING_CONFIG" 2>/dev/null |
+    sed 's/<[^>]*>//g' | head -1
+}
+
+# "needBytes state", or empty when Syncthing cannot be reached. Same shape as
+# tg-go.sh's sync_status(), deliberately - two readers of one endpoint that must
+# not disagree about what "idle" means.
+sync_status() {
+  local k; k="$(sync_key)"
+  [[ -n "$k" ]] || return 0
+  curl -s -m 10 -H "X-API-Key: $k" \
+    "$SYNCTHING_URL/rest/db/status?folder=$SYNC_FOLDER" 2>/dev/null |
+    python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print(d.get("needBytes", 0), d.get("state", "unknown"))
+' 2>/dev/null || true
+}
+
+# 0 = Syncthing says there is nothing left to deliver.
+# Anything else - unreachable, mid-transfer, unexpected output - is "not sure",
+# and the caller waits out the full sleep.
+sync_is_done() {
+  local line need state
+  line="$(sync_status)"
+  [[ -n "$line" ]] || return 1
+  read -r need state <<< "$line"
+  [[ "$need" =~ ^[0-9]+$ ]] || return 1
+  [[ "$need" == "0" && "$state" == "idle" ]]
+}
+
+# Sleep, but wake early once Syncthing reports it has nothing in flight.
+#
+# Polls rather than sleeping blind, so a drain ends promptly after the last
+# file lands instead of up to five minutes later. The poll is a single local
+# HTTP call against 127.0.0.1.
+idle_wait() {
+  local waited=0 step="${IDLE_POLL_SECONDS:-15}"
+  while (( waited < IDLE_WAIT_SECONDS )); do
+    if sync_is_done; then
+      log "Syncthing idle with nothing pending - not waiting out the remaining $(( IDLE_WAIT_SECONDS - waited ))s"
+      return 0
+    fi
+    sleep "$step"
+    waited=$(( waited + step ))
+  done
+}
+
 # Drain progress is written to a state file rather than pushed anywhere.
 #
 # The metrics collector reads it every 15 minutes and the /status dashboard
@@ -313,8 +386,8 @@ cmd_start() {
 
         return 0
       fi
-      log "staging empty - waiting ${IDLE_WAIT_SECONDS}s for Syncthing to deliver more"
-      sleep "$IDLE_WAIT_SECONDS"
+      log "staging empty - waiting up to ${IDLE_WAIT_SECONDS}s for Syncthing to deliver more"
+      idle_wait
       continue
     fi
 
