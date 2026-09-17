@@ -282,9 +282,6 @@ trap 'cleanup; exit 129' HUP
 # and re-hashing those would waste minutes per pass. A deferred file that has
 # not been fingerprinted yet would also fail Check #1 and abort a batch that is
 # otherwise fine.
-log "Check #1 - verifying staged batch"
-write_phase hashing "" 0 "${#batch[@]}"
-
 # Capture the hashes Check #1 computes, so the ledger write at the end of this
 # script does not read every file a second time. PID-scoped, on the work
 # volume, and removed by cleanup() on every exit path including SIGTERM.
@@ -292,7 +289,44 @@ write_phase hashing "" 0 "${#batch[@]}"
 # Check #1 is authoritative here: it is the pass that compares against the
 # manifest, and a file that fails it never reaches the ledger at all.
 BATCH_HASHES="$WORK_DIR/batch-hashes.$$"
-HASH_FILE="$BATCH_HASHES" "$HERE/verify-batch.sh" "${batch[@]}"
+: > "$BATCH_HASHES"
+
+# Check #1 runs PER FILE, immediately before that file uploads.
+#
+# It used to hash the ENTIRE batch up front - 13 minutes for 27 GiB with the
+# network completely idle - and only then start uploading.
+#
+# BE PRECISE ABOUT THE WIN, because it is easy to overstate. This loop is
+# sequential: hashing file N+1 does NOT run concurrently with uploading file N.
+# Total CPU and total bytes read are unchanged. What changes is WHEN the first
+# byte reaches Telegram: after one file's hash rather than after the whole
+# batch's. On a 27 GiB batch the upload now starts within seconds instead of 13
+# minutes, so a drain interrupted part-way has real files in the archive rather
+# than none, and the dashboard shows progress immediately.
+#
+# Genuine overlap would need the hash of N+1 backgrounded against the upload of
+# N. That is worth doing and is deliberately NOT done here: it needs its own
+# reasoning about failure ordering - a background hash failing while an upload
+# is in flight - and this change is meant to be the contained one.
+#
+# WHAT DOES NOT CHANGE. Every file is still hashed against the manifest before
+# a single byte of it is uploaded, and a file that fails is never uploaded at
+# all. The guarantee "nothing reaches Telegram unverified" is per file, and it
+# is exactly as strong as it was.
+#
+# WHAT DOES CHANGE, stated plainly: a batch that fails on its Nth file will
+# already have uploaded files 1..N-1, where before it would have uploaded
+# nothing. That is not a weakening of the integrity chain - those files were
+# each verified before being sent - but it does mean a failed batch can leave
+# files in Telegram. That is already true of any interrupted drain, and it is
+# what the duplicate handling exists for: tg-resolve-ids.py takes the NEWEST
+# message id per name, so a re-run that re-uploads them verifies against the
+# new copies. Staging is still cleared only after Check #2, so nothing is
+# deleted on the strength of a partial batch.
+verify_one() {
+  local file="$1"
+  HASH_FILE="$BATCH_HASHES" "$HERE/verify-batch.sh" "$file"
+}
 
 upload_one() {
   local file="$1" attempt=0 max=8 out rc wait_s
@@ -343,6 +377,13 @@ ids_complete=1
 upload_index=0
 for f in "${batch[@]}"; do
   upload_index=$(( upload_index + 1 ))
+
+  # Verify THIS file, then upload it. A failure aborts under `set -e` with the
+  # file unsent, so nothing unverified ever reaches Telegram.
+  log "Check #1 - verifying $(basename "$f") ($upload_index/${#batch[@]})"
+  write_phase hashing "$(basename "$f")" "$upload_index" "${#batch[@]}"
+  verify_one "$f"
+
   log "uploading $(basename "$f") ($(numfmt --to=iec "$(stat -c %s "$f")"))"
   write_phase uploading "$(basename "$f")" "$upload_index" "${#batch[@]}"
   upload_one "$f"

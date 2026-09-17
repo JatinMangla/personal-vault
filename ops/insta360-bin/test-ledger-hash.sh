@@ -83,6 +83,33 @@ ck "hash file missing" "$(ledger_hash A.insv A.insv 2>/dev/null)" "$real"
 unset BATCH_HASHES
 ck "BATCH_HASHES unset" "$(ledger_hash A.insv A.insv 2>/dev/null)" "$real"
 
+# tg-upload.sh calls verify-batch.sh once PER FILE so hashing overlaps
+# uploading. HASH_FILE must therefore ACCUMULATE. It truncated once, which left
+# only the last file's hash and silently sent the ledger back to re-reading
+# every other file - the optimisation reverting itself with no visible symptom.
+echo "HASH_FILE accumulates across per-file calls:"
+acc="$T/acc"
+mkdir -p "$acc/staging"
+for n in A B C; do printf 'content-%s
+' "$n" > "$acc/staging/$n.insv"; done
+( cd "$acc/staging" && sha256sum ./*.insv > "$acc/manifest.sha256" )
+cat > "$acc/env.sh" <<EOF
+STAGING_DIR=$acc/staging
+MANIFEST=$acc/manifest.sha256
+EOF
+: > "$acc/bh.txt"
+for n in A B C; do
+  TG_ENV_FILE="$acc/env.sh" HASH_FILE="$acc/bh.txt"     bash "$HERE/verify-batch.sh" "$acc/staging/$n.insv" >/dev/null 2>&1
+done
+ck "three per-file runs leave three hashes" "$(wc -l < "$acc/bh.txt" | tr -d ' ')" "3"
+
+acc_ok=yes
+while read -r h nm; do
+  nm="${nm#\*}"; nm="${nm##*/}"
+  [[ "$h" == "$(sha256sum "$acc/staging/$nm" | cut -d' ' -f1)" ]] || acc_ok=no
+done < "$acc/bh.txt"
+ck "every accumulated hash matches its file" "$acc_ok" "yes"
+
 echo
 echo "passed=$pass failed=$fail"
 [[ $fail -eq 0 ]]

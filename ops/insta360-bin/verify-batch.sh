@@ -65,9 +65,14 @@ log "verifying ${#files[@]} file(s) against $(basename "$MANIFEST")"
 # Opt-in: only written when the caller sets HASH_FILE. Running this script by
 # hand is unaffected. A write failure is NOT fatal - the consumer falls back to
 # hashing, so losing this file costs time, never correctness.
+#
+# APPENDED, never truncated. tg-upload.sh calls this once PER FILE so that
+# hashing overlaps uploading, so truncating here would leave only the last
+# file's hash and silently send the ledger back to re-reading every other file.
+# The caller creates the file empty once per batch; this only ever adds to it.
 hash_out=""
 if [[ -n "${HASH_FILE:-}" ]]; then
-  if : > "$HASH_FILE" 2>/dev/null; then
+  if touch "$HASH_FILE" 2>/dev/null; then
     hash_out="$HASH_FILE"
   else
     err "cannot write HASH_FILE=$HASH_FILE - the ledger will re-hash instead"
