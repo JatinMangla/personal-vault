@@ -28,24 +28,65 @@ Research established where the time actually goes and corrected two beliefs:
 
 ---
 
-## READ THIS BEFORE STARTING — what is uncertain
+## READ THIS BEFORE STARTING — all three uncertainties are now RESOLVED
 
-Three weaknesses, stated rather than hidden:
+The three weaknesses this plan was written around were each settled on
+2026-09-17. Kept rather than deleted, because how they resolved is the point:
 
-1. **The plan hinges on one unmeasured fact: is `cryptg` installed?** If it is,
-   Stages 1–2 buy almost nothing and every estimate assuming 7–15 MB/s
-   collapses. **Stage 0 runs first**, and the plan is re-costed if the answer is
-   "already present".
-2. **The resolver bug's severity is unconfirmed.** It fires only when a name is
-   unresolved; on a healthy batch every uploaded `.insv` should resolve. It may
-   be **latent rather than active**. Still wrong, still worth fixing, but any
-   "saves N hours" figure is unproven until measured.
-3. **The 22-hour baseline may be stale.** The run on the night of 2026-09-17 was
-   the first with batch splitting, the guard fix and the resolver deployed.
-   Re-measure before claiming a saving.
+1. ~~**Is `cryptg` installed?**~~ **YES.** Measured on the VM. Stages 1–2 are
+   closed, and every estimate assuming 7–15 MB/s is void. This was the single
+   fact the plan said it hinged on, and it went against the plan.
+2. ~~**The resolver bug's severity is unconfirmed.**~~ **It was ACTIVE, not
+   latent.** The 2026-09-17 journal shows `no message id captured` for *every*
+   file, then `using a full-channel download`, on every batch. Fixed in
+   `c6bc4b6`.
+3. ~~**The 22-hour baseline may be stale.**~~ **Confirmed stale, and still
+   unmeasured.** The run of 2026-09-17 19:57 was killed mid-flight and restarted;
+   the drain in progress at the time of writing is the first clean baseline. Do
+   not credit any saving to a stage until one post-deploy drain is measured.
+
+**What the measurements changed:** upload is network-bound at ~2.3–3.5 MB/s and
+**cannot be reduced by anything in this plan**. It is now the dominant leg. The
+remaining work is all on the verification side, and Stage 4 should be re-costed
+against a real `by message id` Check #2 before it is built.
 
 **Discipline this plan commits to:** apply one stage, measure, keep it only if
 the number moves. A stage that does not move it is reverted, not kept on faith.
+Stages 1 and 2 were closed by that rule before a line of them was run.
+
+---
+
+## Stage 0 — MEASURED 2026-09-17, on the VM, mid-drain
+
+Run against a live upload of `VID_20250607_110125_00_091.insv`, so these are
+load figures rather than idle ones.
+
+| Question | Answer |
+|---|---|
+| Is `cryptg` installed? | **YES** — `import cryptg` succeeds |
+| Is the upload CPU-throttled? | **NO** — `nr_periods 0`, `nr_throttled 0`, `throttled_usec 0` |
+| Upload rate under load | **2.3 MB/s** (69.2 MB in 30 s, from `/proc/<pid>/io`) |
+| CPU split | 1,392 s total; 1,345 s at `nice`, 36 s system |
+
+**Stage 1 is CLOSED — do not run `pipx inject telegram-upload cryptg`.** It is
+already there, so AES-256-IGE runs in optimised C. The "2–4× for one command"
+estimate was based on it being absent; it is not.
+
+**Stage 2 is CLOSED — do not raise `CPUQuota`.** Not "rarely throttled":
+`nr_periods 0` means the quota has never been enforced even once. Raising it
+would take CPU from Immich and change nothing.
+
+### What this settles about the 3.5 MB/s ceiling
+
+`docs/SESSION-HANDOVER.md:186` claimed this was "Telegram's own ingest limit,
+not a local constraint". That was asserted without a measurement, and the
+optimisation plan was right to flag it as untested — but it is now **confirmed
+correct**. Both local explanations are eliminated: the crypto is compiled, and
+the CPU is never throttled. The process is waiting on the network.
+
+**Consequence: upload time is IRREDUCIBLE by anything in this plan.** A 27 GiB
+batch costs ~3.5 hours of upload and no local change alters that. Every
+remaining lever is on the verification side.
 
 ---
 
@@ -79,7 +120,7 @@ journalctl -u tg-archive --no-pager -o cat | grep -cE 'whole channel'
 
 ---
 
-## Stage A — Fix the resolver partial-resolution bug
+## Stage A — Fix the resolver partial-resolution bug — DONE (c6bc4b6)
 
 **Do this regardless of Stage 0's outcome.** It is a correctness bug.
 
@@ -100,9 +141,10 @@ Changes:
 
 ---
 
-## Stage 1 — `cryptg` (~5 min, fully reversible)
+## Stage 1 — `cryptg` — CLOSED, ALREADY INSTALLED
 
-Only if Stage 0 shows it missing.
+**Do not run this.** Stage 0 measured it present on 2026-09-17. Kept for the
+reasoning only; the command below would be a no-op at best.
 
 ```bash
 pipx inject telegram-upload cryptg
@@ -128,9 +170,10 @@ Risk: cryptg may build from source on ARM64 and need `build-essential` +
 
 ---
 
-## Stage 2 — Raise `CPUQuota` (~2 min, self-reverting)
+## Stage 2 — Raise `CPUQuota` — CLOSED, NO THROTTLING EXISTS
 
-Only if Stage 0 shows throttling. `CPUQuota=75%` is three-quarters of **one**
+**Do not run this.** Stage 0 measured `nr_periods 0` / `throttled_usec 0` under
+a live upload: the quota has never once been enforced. `CPUQuota=75%` is three-quarters of **one**
 core of two; pure-Python AES plus SHA-256 saturates it.
 
 ```bash
@@ -143,7 +186,7 @@ responsiveness. Revert with `systemctl revert tg-archive.service`. Only edit
 
 ---
 
-## Stage 2b — Two free wins, no dependencies (~10 min)
+## Stage 2b — Two free wins — DONE (60ce95d, 3a00439)
 
 **`IDLE_WAIT_SECONDS=300` with two idle passes required.** `tg-archive.sh:67`
 and `:292` mean every drain ends with **up to 10 minutes of pure waiting**.
@@ -161,41 +204,58 @@ file cannot change, the flock is held — and saves ~13 min per 27 GiB.
 
 ---
 
-## Stage 3 — Overlap Check #1 hashing with uploading
+## Stage 3 — Check #1 per file — DONE (9a60c8e), but see the note on overlap
 
-Already proposed at `docs/SESSION-HANDOVER.md:178`. Check #1 currently hashes
-the *entire* batch before the first byte uploads — 13 min for 27 GiB with the
-network idle throughout.
+Already proposed at `docs/SESSION-HANDOVER.md:178`. Check #1 hashed the *entire*
+batch before the first byte uploaded — 13 min for 27 GiB, measured again in the
+2026-09-17 log (19:57:14 → 20:10:26), with the network idle throughout.
 
-Hash each file immediately before uploading it. With 2 cores this is genuinely
-parallel, adds no dependency, and reclaims ~25 min per 46 GB. Touches
-`verify-batch.sh`'s call site at `tg-upload.sh:286`, not the upload library.
+**Implemented in 9a60c8e, but the original claim here was wrong.** This said
+hashing each file before uploading it is "genuinely parallel ... reclaims ~25
+min per 46 GB". It is not: the loop is sequential, so hashing file N+1 does not
+overlap uploading file N, and total CPU and bytes read are unchanged.
+
+What the change actually buys is **when the first byte leaves**: after one
+file's hash rather than the whole batch's. A drain interrupted part-way now has
+real files in the archive rather than none, and the dashboard shows progress
+immediately instead of after 13 idle minutes.
+
+**Real overlap is still available and still unbuilt** — it needs the next hash
+backgrounded against the current upload, which needs its own reasoning about a
+background hash failing while an upload is in flight. Given Stage 0's finding
+that upload is network-bound and irreducible, overlapping ~13 min of hashing
+against a ~210 min upload is worth roughly 6% of the batch. Low priority.
 
 ---
 
-## Stage 4 — Parallel transfer: DOWNLOAD first, upload second
+## Stage 4 — Parallel transfer: DOWNLOAD only
 
-**Corrected after self-review.** An earlier draft proposed parallelising the
-upload. Modelling the legs shows that is wrong:
+**Corrected twice.** An earlier draft proposed parallelising the upload; the
+modelling below showed that was wrong. Stage 0's measurements on 2026-09-17 then
+invalidated the model's own assumptions, so the table is restated here with the
+dead rows removed:
 
 | After | Check #1 | Upload | Check #2 | Dominant |
 |---|---|---|---|---|
-| today | 25 m | 220 m | 110 m | upload |
-| id fix working | 25 m | 220 m | 78 m | upload |
-| + cryptg + CPU | 25 m | **70 m** | **78 m** | **Check #2** |
-| + overlap hashing | 0 m | 70 m | **78 m** | **Check #2** |
+| before this session | 13 m blocking | ~210 m | whole archive, hours | Check #2 |
+| after A + 2b + 3 (deployed) | ~0 m blocking | ~210 m | batch-sized | **upload** |
+| + parallel download | ~0 m blocking | ~210 m | faster still | **upload** |
 
-Once the upload is fixed, **Check #2's download dominates** — and parallel
-upload does nothing for it. Telethon downloads are sequential for the same
-reason uploads are.
+**The `+ cryptg + CPU` row that predicted a 70 m upload is deleted: it cannot
+happen.** `cryptg` is already installed and the service is never CPU-throttled,
+so ~210 m for 27 GiB is the real, network-bound floor.
 
-**So: parallel DOWNLOAD in `tg-fetch-ids.py` first. Parallel upload second, and
-only if measurement still justifies it.**
+That inverts the conclusion. **Upload now dominates, and nothing in this plan can
+reduce it.** Parallel download remains worth doing — it is the only remaining
+lever — but it optimises the smaller leg, so measure a real `by message id`
+Check #2 before spending ~150 lines of first-party code on it. If that check
+already costs minutes rather than hours, Stage 4 may not be worth building at
+all.
 
 Verification cannot be cheapened any other way: trusting the upload or sampling
 would break the integrity chain (`SESSION-HANDOVER.md:35`), and fetching by id
-already removed the per-batch archive re-download. What remains is irreducible,
-so the only lever is doing it faster.
+already removed the per-batch archive re-download.
+
 
 ### Why build it ourselves rather than vendor FastTelethon
 
