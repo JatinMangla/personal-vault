@@ -628,14 +628,51 @@ fi
 PIPX_PY="${PIPX_PY:-$HOME/.local/share/pipx/venvs/telegram-upload/bin/python}"
 [[ -x "$PIPX_PY" ]] || PIPX_PY="$(command -v python3 || true)"
 
+# Optional parallel fetcher, OFF unless TG_PAR_FETCH=1.
+#
+# Measured 2026-09-18: the sequential fetch moved 6.2 GB in 162 minutes
+# (0.64 MB/s) while the upload of the same bytes took 25 (4.6 MB/s), so Check #2
+# was 85% of the drain. tg-fetch-par.py fetches several FILES at once - never
+# one file across several connections - so no offset arithmetic exists to get
+# wrong.
+#
+# THREE layers stay in front of it, so enabling this cannot cost footage:
+#   1. it exits non-zero on any short or failed file, and this falls through to
+#      the sequential fetcher below
+#   2. that in turn falls back to the full-channel download
+#   3. Check #2 still hashes every rejoined file against the manifest, and
+#      staging is cleared only if that passes
+PAR_FETCHER="$HERE/tg-fetch-par.py"
+
 if [[ -n "${fetch_ids// /}" ]]; then
-  # shellcheck disable=SC2086
-  log "Check #2 - fetching ${#batch[@]} file(s) by message id (not the whole channel)"
-  if ! ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+  fetched=0
+
+  if [[ "${TG_PAR_FETCH:-0}" == "1" && -r "$PAR_FETCHER" ]]; then
+    log "Check #2 - fetching ${#batch[@]} file(s) by message id, ${TG_FETCH_CONCURRENCY:-4} at a time (parallel)"
+    # shellcheck disable=SC2086
+    if ( cd "$rt_dir" && "$PIPX_PY" "$PAR_FETCHER" \
            --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
            $fetch_ids >/dev/null ); then
-    err "fetch by message id failed - falling back to a full-channel download"
-    full_channel_download || roundtrip_ok=0
+      fetched=1
+    else
+      err "parallel fetch failed - retrying sequentially"
+      # Remove anything the parallel attempt left, so the sequential retry
+      # starts clean rather than trusting a file it did not write itself.
+      # Dot-prefixed: that is where tg-fetch-par.py puts in-flight downloads,
+      # deliberately outside the NAME.[0-9][0-9]* rejoin glob.
+      rm -f "$rt_dir"/.*.part
+    fi
+  fi
+
+  if (( ! fetched )); then
+    # shellcheck disable=SC2086
+    log "Check #2 - fetching ${#batch[@]} file(s) by message id (not the whole channel)"
+    if ! ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+             --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
+             $fetch_ids >/dev/null ); then
+      err "fetch by message id failed - falling back to a full-channel download"
+      full_channel_download || roundtrip_ok=0
+    fi
   fi
 else
   (( ids_complete )) || err "some files reported no message id - using a full-channel download"

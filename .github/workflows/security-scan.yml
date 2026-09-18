@@ -172,6 +172,16 @@ jobs:
         # unreachable, mid-transfer and unparsable all wait the full window.
         run: bash ops/insta360-bin/test-idle-wait.sh
 
+      - name: Parallel fetcher fixtures
+        # tg-fetch-par.py runs INSIDE the integrity chain, between the upload
+        # and the SHA-256 that gates deleting originals. These pin the three
+        # load-bearing properties: a short download must fail rather than reach
+        # the rejoin, an in-flight temp file must stay OUTSIDE the
+        # NAME.[0-9][0-9]* rejoin glob (a naive NAME.part matched it, which
+        # these fixtures caught before it ever ran), and concurrency stays
+        # bounded at 8.
+        run: python3 ops/insta360-bin/test-fetch-par.py
+
       - name: Message-id resolver fixtures
         # tg-resolve-ids.py decides which Telegram message Check #2 fetches
         # back. A WRONG id fetches the wrong bytes, and the channel contains
