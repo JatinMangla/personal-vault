@@ -154,6 +154,15 @@ jobs:
         # else - the speed change must be indistinguishable from the slow path.
         run: bash ops/insta360-bin/test-ledger-hash.sh
 
+      - name: Prune --trust-size fixtures
+        # --trust-size deletes originals from the card on a name+size match,
+        # without reading the file. It is a deliberately weaker check than the
+        # default SHA-256, so the boundary of what it will and will not act on
+        # is pinned: a size mismatch must be KEPT, and a legacy ledger row with
+        # no size column must fall back to hashing rather than trusting a bare
+        # filename - the exact mistake tg-prune.sh exists to prevent.
+        run: bash ops/insta360-bin/test-prune-trust-size.sh
+
       - name: Idle-wait fixtures
         # idle_wait() ends a drain's trailing wait early when Syncthing reports
         # nothing left to deliver. Waiting too long costs minutes; stopping too

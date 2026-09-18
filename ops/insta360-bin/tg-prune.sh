@@ -10,13 +10,23 @@
 # draining at 1% per 3.3 minutes. Skipping at the VM saves Telegram bandwidth;
 # skipping HERE saves the transfer as well.
 #
-# Hashing locally reads at roughly 3.7 GB/min, several times faster than
-# sending the same bytes even on a direct link. So checking still costs less
-# than transferring - though by a smaller margin than when the connection
-# relayed at 1.3 MB/s, which is when this script was written.
+# WHAT IT COSTS. Hashing reads the card over OTG at ~13-16 MB/s (measured:
+# 19,951,255,552 bytes in 1255 s on a real multi-file prune, and 60 min for
+# 46 GB in the field on 2026-09-18). Against a ~12 MB/s transfer that is barely
+# faster than just sending the bytes, so the saving comes from NOT transferring
+# and NOT staying tethered, not from the hash being cheap.
+#
+# An earlier version of this header claimed "roughly 3.7 GB/min". That was a
+# Syncthing SCAN rate, not an OTG read rate - the same conflation that once
+# sized a timeout badly enough to abort the large files it was protecting.
+#
+# THE COST SCALES WITH WHAT IS SITTING IN tg-batch. Pruning after every drain
+# costs minutes; letting eight drains accumulate means re-hashing all of them.
+# Prune after each drain, not when the card fills.
 #
 #   tg-prune              show what would be removed, remove nothing
 #   tg-prune --apply      actually remove them
+#   tg-prune --trust-size skip hashing: match on name + size (see below)
 #
 # SAFETY. --apply DELETES archived files from tg-batch. That is deliberate, and
 # it is the safer of the two options in practice.
@@ -46,14 +56,21 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/immich_phone}"
 
 APPLY=0
 KEEP=0
+TRUST_SIZE=0
 for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
     --keep)  KEEP=1 ;;
+    --trust-size) TRUST_SIZE=1 ;;
     -h|--help)
       echo "tg-prune                  dry run - show what is already archived"
       echo "tg-prune --apply          DELETE archived files from tg-batch"
       echo "tg-prune --apply --keep   move them to ../tg-archived instead"
+      echo
+      echo "tg-prune --trust-size     FAST: match on name+size, do not hash."
+      echo "                          Minutes -> seconds, and a WEAKER check."
+      echo "                          Only when a drain has JUST reported"
+      echo "                          'remaining 0'. See the notes in this file."
       exit 0
       ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
@@ -184,6 +201,16 @@ fi
 ledger_lines="$(wc -l < "$LEDGER" | tr -d ' ')"
 log "ledger holds $ledger_lines archived file(s)"
 
+# Say which check is running, every time. The two modes delete on DIFFERENT
+# evidence, so a log that does not distinguish them cannot be audited later.
+if (( TRUST_SIZE )); then
+  log "MODE: --trust-size - matching on name + SIZE, not content"
+  log "  faster, and weaker. Correct only if nothing has been re-recorded"
+  log "  since the last drain reported 'remaining 0'."
+else
+  log "MODE: full SHA-256 verification (default)"
+fi
+
 if (( ledger_lines == 0 )); then
   log "nothing archived yet - every file here still needs uploading"
   exit 0
@@ -227,6 +254,57 @@ for f in "${files[@]}"; do
   if [[ -z "$recorded" ]]; then
     fresh+=("$f")
     continue
+  fi
+
+  # --trust-size: compare the SIZE instead of reading the file.
+  #
+  # Hashing is the whole cost of this script. A 46 GB batch takes ~60 minutes
+  # because every name-matched file is read end to end at OTG speed (~13-16
+  # MB/s measured). Comparing sizes needs one stat() per file, so the same
+  # batch finishes in seconds.
+  #
+  # WHAT THIS GIVES UP, stated plainly. The hash proves the file on the card is
+  # the file in Telegram. The size proves only that they are the same LENGTH. A
+  # file that was re-recorded to exactly the same byte count, or corrupted in
+  # place without changing length, would pass this check and be deleted while
+  # the archived copy is different footage. HARD-WON.md records a
+  # PASTE_HASH_HERE placeholder that the content check caught and a name check
+  # would not have - this flag reopens a narrower version of that hole.
+  #
+  # WHY IT IS STILL DEFENSIBLE, and when:
+  #   - the ledger's size column is written from the file that COMPLETED a
+  #     Telegram round trip, so a size match means "same length as the verified
+  #     copy", not merely "same length as something we once saw"
+  #   - an .insv is written once by the camera and never edited in place, so
+  #     same-name-same-size-different-content needs a deliberate re-recording
+  #     that lands on an identical byte count
+  #   - it is OFF by default, and the dry run still shows exactly what would go
+  #
+  # Use it when a drain has JUST reported `remaining 0`, which is the moment
+  # the card and the ledger are known to agree. Do not use it to prune a card
+  # that has been recorded to since the last drain.
+  #
+  # Rows written before 2026-09-15 have no size column. Those are NOT eligible:
+  # a missing size cannot be compared, so they fall through to hashing rather
+  # than being trusted on the name alone.
+  if (( TRUST_SIZE )); then
+    rec_size="$(awk -v want="$base" '$2 == want { print $3; exit }' "$LEDGER")"
+    actual_size="$(stat -c %s "$f" 2>/dev/null || echo "")"
+
+    if [[ "$rec_size" =~ ^[0-9]+$ ]] && [[ "$actual_size" =~ ^[0-9]+$ ]]; then
+      if [[ "$rec_size" == "$actual_size" ]]; then
+        archived+=("$f")
+      else
+        log "same name, different size - keeping: $base"
+        renamed=$(( renamed + 1 ))
+        fresh+=("$f")
+      fi
+      continue
+    fi
+
+    # No usable size on either side - fall through to the hash rather than
+    # guessing. A pre-2026-09-15 ledger row lands here.
+    log "no size recorded - hashing instead: $base"
   fi
 
   # An unreadable file must not abort the run, and must never be deleted.
