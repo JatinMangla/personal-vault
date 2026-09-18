@@ -24,6 +24,11 @@
 # costs minutes; letting eight drains accumulate means re-hashing all of them.
 # Prune after each drain, not when the card fills.
 #
+# MEASURED on the real card, 2026-09-18: 51 GB across 22 files took
+# 4 SECONDS with --trust-size, against ~56 min hashing. The fast path does not
+# scale with data size at all - it is one stat() per file, so it is seconds
+# whether the batch is 6 GB or 200 GB.
+#
 #   tg-prune              show what would be removed, remove nothing
 #   tg-prune --apply      actually remove them
 #   tg-prune --trust-size skip hashing: match on name + size (see below)
@@ -171,7 +176,14 @@ for f in "${files[@]}"; do
   sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
   hash_bytes=$(( hash_bytes + sz ))
 done
-if (( hash_bytes > 2000000000 )); then
+# Not in --trust-size mode: nothing is hashed, so a hashing estimate would be
+# a message the script immediately contradicts. Observed in the field on
+# 2026-09-18, where a run that finished in 4 seconds opened by predicting 56
+# minutes. Harmless, but a script that misdescribes its own behaviour is how a
+# healthy run gets read as a broken one.
+if (( TRUST_SIZE )); then
+  log "checking $(( hash_bytes / 1000000000 )) GB by name + size - no file is read"
+elif (( hash_bytes > 2000000000 )); then
   # 15 MB/s, from a REAL multi-file prune, not a single-file benchmark.
   #
   # `dd` reading one file's opening 200 MB reported 20.4 MB/s, and an estimate
