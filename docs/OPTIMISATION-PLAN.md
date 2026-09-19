@@ -228,34 +228,46 @@ against a ~210 min upload is worth roughly 6% of the batch. Low priority.
 
 ---
 
-## Stage 4 — Parallel transfer: DOWNLOAD only
+## Stage 4 — Parallel DOWNLOAD — DONE (a7e6add), MEASURED 14x
 
-**Corrected twice.** An earlier draft proposed parallelising the upload; the
-modelling below showed that was wrong. Stage 0's measurements on 2026-09-17 then
-invalidated the model's own assumptions, so the table is restated here with the
-dead rows removed:
+**Built, deployed and measured. Keep it.**
 
-| After | Check #1 | Upload | Check #2 | Dominant |
-|---|---|---|---|---|
-| before this session | 13 m blocking | ~210 m | whole archive, hours | Check #2 |
-| after A + 2b + 3 (deployed) | ~0 m blocking | ~210 m | batch-sized | **upload** |
-| + parallel download | ~0 m blocking | ~210 m | faster still | **upload** |
+| Run | Bytes | Check #2 download | Rate |
+|---|---|---|---|
+| 2026-09-18, sequential | 6.2 GB | **162 min** | 0.64 MB/s |
+| 2026-09-19, parallel (4) | 6.55 GB | **12 min 33 s** | **8.9 MB/s** |
 
-**The `+ cryptg + CPU` row that predicted a 70 m upload is deleted: it cannot
-happen.** `cryptg` is already installed and the service is never CPU-throttled,
-so ~210 m for 27 GiB is the real, network-bound floor.
+`tg-fetch-par.py`, enabled with `TG_PAR_FETCH=1`. It fetches several FILES at
+once, never one file across several connections, so no offset arithmetic exists
+to get wrong. The 4-part split file rejoined in numeric order and verified
+byte-identical on the first real run.
 
-That inverts the conclusion. **Upload now dominates, and nothing in this plan can
-reduce it.** Parallel download remains worth doing — it is the only remaining
-lever — but it optimises the smaller leg, so measure a real `by message id`
-Check #2 before spending ~150 lines of first-party code on it. If that check
-already costs minutes rather than hours, Stage 4 may not be worth building at
-all.
+**The TimeoutError storm is gone** - one occurrence, against dozens
+sequentially. When a connection stalls the other three keep working, which is
+the mechanism, confirmed rather than assumed.
 
-Verification cannot be cheapened any other way: trusting the upload or sampling
-would break the integrity chain (`SESSION-HANDOVER.md:35`), and fetching by id
-already removed the per-batch archive re-download.
+Whole drain, 2026-09-19: upload 9 min, fetch 12.5, hash+verify 4.5, idle 1.8 =
+**~28 minutes** for 6.6 GB.
 
+### Two predictions this stage falsified
+
+1. **I recommended against building it**, reasoning that upload dominated and
+   was irreducible, so the smaller leg was not worth ~150 lines. The 162-minute
+   Check #2 disproved that: the download was 85% of the drain, not the smaller
+   leg. The plan's original instinct - parallel DOWNLOAD first - was right.
+2. **The timeouts were read as Telegram straining on one connection**, with a
+   real risk that four would make it worse. The opposite happened.
+
+Both were corrected by measurement, which is the discipline this plan set out
+with. Neither would have been caught by reasoning harder.
+
+### Upload remains the floor
+
+At 12.2 MB/s on 2026-09-19 the upload leg is now the largest single component
+and is network-bound - `cryptg` is installed and the service is never CPU
+throttled (Stage 0). Parallel UPLOAD is the only lever left, and it is NOT
+recommended: it writes to the archive rather than reading from it, so a bug
+costs footage instead of time, and the gain is now minutes.
 
 ### Why build it ourselves rather than vendor FastTelethon
 

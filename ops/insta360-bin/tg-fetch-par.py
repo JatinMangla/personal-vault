@@ -17,6 +17,16 @@ for that run is full of
 
 which is one connection stalling and retrying while nothing else progresses.
 
+MEASURED IN PRODUCTION, 2026-09-19, first real run with TG_PAR_FETCH=1:
+
+    6.55 GB (4 split parts) fetched in 12m 33s = 8.9 MB/s
+    against 6.2 GB in 162 min = 0.64 MB/s sequentially
+
+~14x faster, and ONE TimeoutError in the journal instead of a storm of them:
+when a connection stalls the other three keep working, which is the mechanism
+this was built for. The whole drain - upload, fetch, hash, verify - came to
+~28 minutes.
+
 WHAT IT PARALLELISES, AND WHAT IT DELIBERATELY DOES NOT
 ------------------------------------------------------
 Several FILES at once. NOT one file across several connections.
