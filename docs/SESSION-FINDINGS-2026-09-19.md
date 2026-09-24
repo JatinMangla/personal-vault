@@ -13,6 +13,53 @@ them; it replaces nothing.
 
 ---
 
+## SUPERSEDED IN PART — see `8c4a829` (2026-09-24/25)
+
+A later incident revised two things this file records. Kept rather than edited
+away, because the way each was wrong is the useful part.
+
+**1. `TimeoutError (GetFileRequest)` is NOT reliably benign.**
+
+This file reports one timeout in the parallel run against dozens sequentially,
+and reads that as "when a connection stalls the other three keep working". On
+2026-09-24 the by-id fetch hit **twelve** timeouts on a file uploaded *seconds
+earlier*, then fell through to the whole-channel fallback: **162 GB onto ~111 GB
+free, at 0.55 MB/s**, for 6+ hours with 50 GB of scratch. It could never have
+finished.
+
+The single timeout on 2026-09-19 was a lucky sample, not a property. Telegram
+`GetFileRequest` timeouts are transient but can arrive in bursts, and the
+fallback I treated as a safety net became the trap: it was never checked
+against free space.
+
+Fixed in `8c4a829` — by-id retries after 120 s and 300 s
+(`TG_FETCH_RETRY_DELAYS`), each from an empty scratch directory, and
+`full_channel_fits()` so the whole-channel path runs only when
+archive + batch + margin actually fit. Otherwise Check #2 fails with staging
+kept and the drain retries. Fixtures: `test-channel-fallback.sh`.
+
+**2. The Syncthing scan rate was not 5.3 MB/s.**
+
+The "Syncthing slow scan" section below concludes the fix was pruning rather
+than tuning. **The pruning conclusion stands** — 49 GB of already-archived
+footage on the card was real, and removing it was right. But the 5.3 MB/s figure
+behind it was wrong: on 2026-09-24 the phone measured **15 MB/s whenever
+connected**, and the apparent slowness was the phone being *disconnected*
+21:10–23:30 IST by Android battery settings.
+
+So this file added a fourth wrong rate figure to a project whose recurring bug
+is exactly that — a number measured in one context reused in another. The 2.5
+hours was disconnection plus redundant work, not a slow scanner. **`hashers`
+tuning remains correctly unpursued**, for a better reason than the one given
+below.
+
+Also found then: `.roundtrip` sits inside the receive-only Syncthing folder, so
+the VM hashes gigabytes it never needs. Add `/.roundtrip` to the VM
+`.stignore`.
+
+
+---
+
 ## Headline: the drain went from hours to ~28 minutes
 
 Measured end to end on 2026-09-19, 6.6 GB:
@@ -87,6 +134,11 @@ logged a storm of `TimeoutError ... GetFileRequest`; I read that as Telegram
 straining on one connection and warned four might be worse. The opposite: **one**
 timeout in the parallel run. When a connection stalls, the other three keep
 working.
+
+> **Revised 2026-09-24 (`8c4a829`).** One timeout was a lucky sample, not a
+> property: a later by-id fetch hit **twelve** on a just-uploaded file and fell
+> through to a whole-channel download that could not fit. See the supersession
+> note at the top.
 
 **3. I estimated prune's fast path at 5–10 seconds.** It was 4 — on 51 GB, not
 the 46 GB I costed. Right shape, and the arithmetic was replaced with the real
@@ -172,6 +224,11 @@ What the evidence showed:
 So Syncthing spent 2.5 hours re-hashing 49 GB of footage **already verified in
 Telegram**. After `tg-prune --trust-size --apply` cleared it in 3 seconds, the
 next run went almost straight to transferring — no long scan at all.
+
+> **Revised 2026-09-24 (`8c4a829`).** The pruning conclusion below stands, but
+> the 5.3 MB/s that motivated it was wrong — the phone measured **15 MB/s when
+> connected**, and the apparent slowness was it being disconnected for over two
+> hours by Android battery settings.
 
 **Conclusion: the fix was removing the work, not speeding it up.** `hashers`
 tuning was deliberately not pursued: even tripling the scan rate leaves ~50
