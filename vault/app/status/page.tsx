@@ -252,6 +252,7 @@ export default function StatusPage() {
             // The gauge guards against NaN too, but coalescing here keeps the
             // "undefined means nothing staged" decision at the call site.
             { label: 'Staging', bytes: payload.storage.staging_bytes ?? 0, color: 'var(--accent-dim)' },
+            { label: 'Check #2 scratch', bytes: payload.storage.roundtrip_bytes ?? 0, color: 'var(--red)' },
           ]}
         />
         {payload.immich.api_ok === false && (
@@ -379,6 +380,12 @@ export default function StatusPage() {
             />
           )}
           <StatRow label="In staging" value={formatBytes(payload.storage.staging_bytes ?? 0)} />
+          {(payload.storage.roundtrip_bytes ?? 0) > 0 && (
+            <StatRow
+              label="Check #2 downloading"
+              value={formatBytes(payload.storage.roundtrip_bytes ?? 0)}
+            />
+          )}
           <div className="mt-075">
             <LimitMeter
               label="Boot volume"

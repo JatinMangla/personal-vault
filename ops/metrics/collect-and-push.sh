@@ -56,6 +56,7 @@ done
 # du -sb on a directory that does not exist should report 0, not fail the run.
 dir_bytes() {
   local d="$1" out
+  shift   # anything else is passed to du, e.g. --exclude=NAME
   [[ -d "$d" ]] || { echo 0; return; }
 
   # Capture, then validate. NOT `du ... | cut -f1 || echo 0`.
@@ -68,7 +69,7 @@ dir_bytes() {
   #
   # Invisible while the collector ran as root, because du never failed. It
   # surfaced the first time it ran as ubuntu.
-  out="$(du -sb "$d" 2>/dev/null | cut -f1 | head -1)"
+  out="$(du -sb "$@" "$d" 2>/dev/null | cut -f1 | head -1)"
   [[ "$out" =~ ^[0-9]+$ ]] && echo "$out" || echo 0
 }
 
@@ -243,10 +244,17 @@ THUMBS_BYTES=$(dir_bytes "$MEDIA_DIR/thumbs")
 ENCODED_BYTES=$(dir_bytes "$MEDIA_DIR/encoded-video")
 PROFILE_BYTES=$(dir_bytes "$MEDIA_DIR/profile")
 BACKUPS_BYTES=$(dir_bytes "$MEDIA_DIR/backups")
-# Insta360 drain staging. Not an Immich directory: it holds one file in flight
+# Insta360 drain staging. Not an Immich directory: it holds footage in flight
 # between the camera card and Telegram. Without it on the dashboard, a transfer
 # in progress inflates the block-volume gauge with nothing to account for it.
-STAGING_BYTES=$(dir_bytes "$MEDIA_DIR/tg-staging")
+#
+# Check #2's scratch (.roundtrip) is measured SEPARATELY. It sits inside
+# tg-staging, and counting it as staging misled a whole diagnosis: on
+# 2026-09-24 a whole-channel Telegram download growing .roundtrip was read as
+# Syncthing delivering footage at "15 MB/s". Staging now means footage waiting
+# to upload; roundtrip means Telegram downloads being verified.
+STAGING_BYTES=$(dir_bytes "$MEDIA_DIR/tg-staging" --exclude=.roundtrip)
+ROUNDTRIP_BYTES=$(dir_bytes "$MEDIA_DIR/tg-staging/.roundtrip")
 
 # Insta360 drain progress, written by tg-archive. Absent until a drain has run,
 # so every field defaults to zero rather than failing the push - a collector
@@ -403,7 +411,7 @@ json_str_vars HOST_NAME SYNC_STATE DRAIN_STATUS DRAIN_PHASE DRAIN_PHASE_FILE \
   HEALTH_SERVER HEALTH_ML HEALTH_REDIS HEALTH_DB
 json_num_vars BLOCK_TOTAL BLOCK_USED BLOCK_AVAIL BOOT_TOTAL BOOT_USED BOOT_AVAIL \
   ORIGINALS_BYTES UPLOAD_BYTES LIBRARY_BYTES THUMBS_BYTES ENCODED_BYTES \
-  PROFILE_BYTES STAGING_BYTES BACKUPS_BYTES \
+  PROFILE_BYTES STAGING_BYTES ROUNDTRIP_BYTES BACKUPS_BYTES \
   SYNC_NEED_BYTES SYNC_NEED_FILES SYNC_GLOBAL_FILES SYNC_LOCAL_FILES \
   DRAIN_PHASE_INDEX DRAIN_PHASE_TOTAL DRAIN_TOTAL DRAIN_DONE DRAIN_REMAINING \
   DRAIN_BYTES DRAIN_BYTES_UNKNOWN DRAIN_UPDATED \
@@ -431,6 +439,8 @@ read -r -d '' PAYLOAD <<JSON || true
     "encoded_video_bytes": ${ENCODED_BYTES},
     "profile_bytes": ${PROFILE_BYTES},
     "staging_bytes": ${STAGING_BYTES},
+    "roundtrip_bytes": ${ROUNDTRIP_BYTES},
+    "roundtrip_bytes": ${ROUNDTRIP_BYTES},
     "backups_bytes": ${BACKUPS_BYTES}
   },
   "sync": {

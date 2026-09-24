@@ -60,6 +60,13 @@ export interface MetricsPayload {
      * render those rows without it.
      */
     staging_bytes?: number;
+    /**
+     * Check #2's verification downloads (tg-staging/.roundtrip), measured
+     * apart from staging since 2026-09-25 - counted together, a Telegram
+     * download looked like Syncthing delivering footage. Optional: older
+     * samples have none.
+     */
+    roundtrip_bytes?: number;
   };
   /**
    * Syncthing, the phone -> VM half of the archive pipeline.
