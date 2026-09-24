@@ -60,11 +60,11 @@ run_cases() {
 
   # The batch counts once (batch_bytes is sizes x2, the channel holds it once).
   archive_bytes=$(( 70 * GIB )); batch_bytes=$(( 2 * 10 * GIB )); AVAIL_KB=$(( 95 * 1024 * 1024 ))
-ck "batch counted once, not twice" allow
+  ck "batch counted once, not twice" allow
 
-# Unparsable df output must refuse, never allow.
-AVAIL_KB="n/a"; archive_bytes=0; batch_bytes=0
-ck "unparsable free space is refused" refuse
+  # Unparsable df output must refuse, never allow.
+  AVAIL_KB="n/a"; archive_bytes=0; batch_bytes=0
+  ck "unparsable free space is refused" refuse
 }
 run_cases
 
