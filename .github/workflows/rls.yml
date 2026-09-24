@@ -1,0 +1,63 @@
+name: rls
+
+# Row-level security and privilege assertions against a local Supabase with
+# every migration applied. See vault/supabase/tests/rls.test.sql for what is
+# checked and why.
+#
+# Only runs when the database definition changes: starting Supabase takes a few
+# minutes, and nothing else can alter RLS. Keeps Actions minutes near zero.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vault/supabase/**'
+      - '.github/workflows/rls.yml'
+  pull_request:
+    paths:
+      - 'vault/supabase/**'
+      - '.github/workflows/rls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned, like every other tool here. Must match the version the config in
+  # vault/supabase/config.toml was generated with.
+  SUPABASE_CLI_VERSION: '2.117.0'
+
+jobs:
+  rls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: vault
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install the Supabase CLI (pinned release binary)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/supabase.tgz \
+            "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_amd64.tar.gz"
+          mkdir -p /tmp/supabase-cli
+          tar -xzf /tmp/supabase.tgz -C /tmp/supabase-cli
+          /tmp/supabase-cli/supabase --version
+
+      - name: Start Supabase and apply every migration
+        run: /tmp/supabase-cli/supabase start
+
+      - name: RLS and privilege assertions
+        run: |
+          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" \
+            -v ON_ERROR_STOP=1 -f supabase/tests/rls.test.sql
+
+      - name: Stop Supabase
+        if: always()
+        run: /tmp/supabase-cli/supabase stop --no-backup

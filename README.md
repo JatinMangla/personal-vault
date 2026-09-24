@@ -1,7 +1,11 @@
 # Personal Media & Document Vault
 
-A personal photo, video and document archive that costs **$0.00/year** and keeps
-every original in at least two places.
+A personal photo, video and document archive that costs **$0.00/year**.
+
+Not every original is in two places, and this says so up front: the Immich
+database and the photos that fit are backed up offsite (see 2 below), but
+**the Insta360 footage exists as ONE copy, in a Telegram channel** — no free
+tier holds 250 GB twice. See `docs/RUNBOOK.md` for protecting that account.
 
 Four components, one monorepo:
 
@@ -24,7 +28,9 @@ Vercel never sees the key. Nobody — not Supabase, not Vercel, not the author o
 this repository — can decrypt your files without your passphrase.
 
 The recovery code shown once at setup is the only backstop. **Write it down and
-store it somewhere physical.** If you lose both, the files are unrecoverable.
+store it somewhere physical.** If you forget the passphrase, "Forgot
+passphrase?" on the unlock screen takes the code and sets a new passphrase;
+nothing is re-encrypted. If you lose both, the files are unrecoverable.
 
 That is the correct behaviour of an encrypted system, not a bug. It is the same
 property that makes the encryption meaningful.
@@ -112,9 +118,10 @@ No developer account is needed. Nothing is submitted or reviewed.
 | Vercel Hobby | 100 GB transfer, 1M function calls/mo | < 1 GB, ~43k calls | Very low — files bypass Vercel | Presigned URLs only |
 | Supabase | 500 MB Postgres | ~80 MB (78 of it metrics) | Low | 30-day retention, pruned nightly |
 | Oracle Object Storage | 10 GiB (Trial) / ~20 GB (Always Free) | < 8 GiB | Objects DELETED if over limit at trial end | Script refuses to back up past 85% |
+| Telegram (Insta360 archive) | No storage cap; 2 GB/file (4 GB Premium) | ~250 GB | **None in money — but it is the ONLY copy of the footage**, with no SLA | Ledger now in nightly restic; see RUNBOOK for account hardening |
 | Tailscale | 3 users / 100 devices | 1 / ~4 | None | — |
 | GitHub Actions | 2,000 min/mo | < 100 min | None | — |
-| healthchecks.io | 20 checks | 2 | None | — |
+| healthchecks.io | 20 checks | 4 (backup, metrics, tg-upload, video-sync) | None | — |
 | **Total** | | | | **$0.00/year** |
 
 **On the 1-minute metrics cadence** (2026-09-16): it adds no service and costs
@@ -161,9 +168,9 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P1 | Oracle VM, volumes, Tailscale | **Done** — zero open TCP ports verified; UDP 41641 open by decision |
 | P2 | Immich running, hardened, tuned | **Done** — all containers healthy, Tailscale-only |
 | P3 | **Backup + verified restore** (gate) | Backup runs and verifies; drill **PASS (DB-ONLY)** — media path untested |
-| P4 | **Crypto core + tests** (gate) | **Passed** — 46/46 |
+| P4 | **Crypto core + tests** (gate) | **Passed** — 115/115 (2026-09-24) |
 | P5 | Presign API + auth | **Live and in use** - real file round-tripped, RLS verified |
-| P6 | **Responsive UI + PWA** (gate) | **Passed** — 140/140, PWA installable |
+| P6 | **Responsive UI + PWA** (gate) | **Passed** — 142/142, PWA installable |
 | P7 | Collector + `/status` dashboard | **Done** — live metrics every 1 min, healthcheck green |
 | P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
 

@@ -1,5 +1,9 @@
 # Session handover — 2026-09-14 to 09-16
 
+> **Newer:** the latest state, open items and deploy order are in
+> `docs/REVIEW-2026-09-24.md`. This file remains the record of the 09-14 to 09-16
+> decisions.
+
 Written for the next Claude Code session. **Read `docs/HARD-WON.md` first** —
 it holds the technical walls. This file holds the *decisions*, why they were
 made, and what state the system is actually in, so none of it gets relitigated.

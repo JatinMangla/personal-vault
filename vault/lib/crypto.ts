@@ -12,10 +12,14 @@
  * platform primitive rather than a library.
  *
  * WHY CHUNKED. `crypto.subtle.encrypt` has no streaming interface - it consumes
- * an entire ArrayBuffer and returns another. Encrypting a 400 MB PDF therefore
+ * an entire ArrayBuffer and returns another. Encrypting a 400 MB PDF in one call
  * needs the plaintext and the ciphertext resident at once, which exceeds the
- * per-tab memory ceiling on iOS Safari and kills the tab. Fixed 4 MB chunks
- * bound peak memory regardless of file size and give a real progress signal.
+ * per-tab memory ceiling on iOS Safari and kills the tab. Fixed 4 MB chunks give
+ * a real progress signal, and bound memory ONLY if the caller also streams:
+ * `encryptBlob` reads the source one chunk at a time and `decryptStream`
+ * decrypts as bytes arrive, so neither holds the whole plaintext. The
+ * whole-buffer `encryptFile`/`decryptFile` are kept for tests and small inputs;
+ * the transfer path must not use them.
  *
  * WHY A FRESH IV PER CHUNK. AES-GCM is a counter mode. Reusing a (key, nonce)
  * pair across two different plaintexts leaks their XOR and enables forgery of
@@ -43,6 +47,9 @@ export const IV_LENGTH = 12;
 
 /** GCM authentication tag length in bits. */
 export const TAG_LENGTH = 128;
+
+/** Bytes each chunk's ciphertext exceeds its plaintext by: the GCM tag. */
+const TAG_BYTES = TAG_LENGTH / 8;
 
 /** Salt length for key derivation, in bytes. */
 export const SALT_LENGTH = 16;
@@ -158,14 +165,17 @@ export async function deriveKey(
 /**
  * Derive a key and allow it to be exported.
  *
- * Used only by the recovery-code path, which must wrap the same key material
- * under a second credential. Never use this for the normal login flow.
+ * Used only where the key must be wrapped: upgrading a pre-envelope account,
+ * whose data key IS this derived key. Never hold its result as the session key.
  */
 export async function deriveExtractableKey(
   passphrase: string,
   salt: Uint8Array,
   iterations: number = PBKDF2_ITERATIONS,
 ): Promise<CryptoKey> {
+  if (iterations < 600_000) {
+    throw new Error(`PBKDF2 iterations must be >= 600000, got ${iterations}`);
+  }
   const material = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(passphrase),
@@ -252,6 +262,83 @@ export async function encryptFile(
   };
 }
 
+/**
+ * Exact ciphertext size for a plaintext of `plaintextSize` bytes.
+ *
+ * Deterministic - one GCM tag per chunk, and a zero-byte file is still one
+ * chunk - so the upload URL can be requested BEFORE encryption finishes, taking
+ * that round trip off the critical path.
+ */
+export function ciphertextSizeFor(plaintextSize: number): number {
+  return plaintextSize + TAG_BYTES * Math.max(1, Math.ceil(plaintextSize / CHUNK_SIZE));
+}
+
+/**
+ * Encrypt a Blob (or File) without ever holding its whole plaintext.
+ *
+ * Produces exactly the wire format of `encryptFile` - same chunking, same
+ * manifest, one fresh IV per chunk - so either decrypt path reads its output.
+ * Differences are only in memory and time:
+ *
+ *   - the source is read one chunk at a time via `Blob.slice`, never whole
+ *   - the result is a Blob of the ciphertext chunks, never concatenated into
+ *     one buffer (browsers may spill large Blobs to disk)
+ *   - the NEXT chunk is read while the current one encrypts, so the read and
+ *     the cipher overlap instead of taking turns
+ *
+ * `signal` stops the loop early - used when the upload URL request fails while
+ * encryption is still running, so no CPU is spent on a doomed upload.
+ */
+export async function encryptBlob(
+  source: Blob,
+  key: CryptoKey,
+  onProgress?: ProgressFn,
+  signal?: AbortSignal,
+): Promise<{ body: Blob; manifest: EncryptionManifest }> {
+  const chunkCount = Math.max(1, Math.ceil(source.size / CHUNK_SIZE));
+  const chunks: ChunkDescriptor[] = [];
+  const parts: Uint8Array[] = [];
+
+  const read = (index: number): Promise<ArrayBuffer> => {
+    const start = index * CHUNK_SIZE;
+    return source.slice(start, Math.min(start + CHUNK_SIZE, source.size)).arrayBuffer();
+  };
+
+  let pending = read(0);
+  for (let index = 0; index < chunkCount; index++) {
+    signal?.throwIfAborted();
+    const slice = await pending;
+    if (index + 1 < chunkCount) pending = read(index + 1);
+
+    // Fresh 96 bits from the CSPRNG for every single chunk. See module header.
+    const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
+    const encrypted = new Uint8Array(
+      await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv as BufferSource, tagLength: TAG_LENGTH },
+        key,
+        slice,
+      ),
+    );
+
+    chunks.push({ index, iv: bytesToBase64(iv), ciphertextLength: encrypted.length });
+    parts.push(encrypted);
+    onProgress?.((index + 1) / chunkCount);
+  }
+
+  return {
+    body: new Blob(parts as BlobPart[], { type: 'application/octet-stream' }),
+    manifest: {
+      version: MANIFEST_VERSION,
+      algorithm: 'AES-GCM',
+      kdf: 'PBKDF2-SHA256',
+      iterations: PBKDF2_ITERATIONS,
+      chunkSize: CHUNK_SIZE,
+      plaintextSize: source.size,
+      chunks,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Decryption
 // ---------------------------------------------------------------------------
@@ -270,12 +357,7 @@ export async function decryptFile(
   key: CryptoKey,
   onProgress?: ProgressFn,
 ): Promise<Uint8Array> {
-  if (manifest.version !== MANIFEST_VERSION) {
-    throw new Error(`Unsupported manifest version: ${manifest.version}`);
-  }
-  if (manifest.algorithm !== 'AES-GCM') {
-    throw new Error(`Unsupported algorithm: ${manifest.algorithm}`);
-  }
+  checkManifest(manifest);
 
   const out = new Uint8Array(manifest.plaintextSize);
   let readOffset = 0;
@@ -320,6 +402,111 @@ export async function decryptFile(
   }
 
   return out;
+}
+
+function checkManifest(manifest: EncryptionManifest): void {
+  if (manifest.version !== MANIFEST_VERSION) {
+    throw new Error(`Unsupported manifest version: ${manifest.version}`);
+  }
+  if (manifest.algorithm !== 'AES-GCM') {
+    throw new Error(`Unsupported algorithm: ${manifest.algorithm}`);
+  }
+}
+
+/**
+ * Decrypt ciphertext AS IT ARRIVES, chunk by chunk, into a Blob.
+ *
+ * Same guarantees as `decryptFile` - explicit index order, a length check per
+ * chunk, GCM authentication per chunk, a total-size check - but decryption of
+ * chunk N overlaps the network delivering chunk N+1, and neither the whole
+ * ciphertext nor a preallocated whole plaintext is ever resident.
+ *
+ * A throw means wrong key, tampering or truncation. Callers must discard the
+ * partial result: nothing is returned until every chunk has authenticated.
+ */
+export async function decryptStream(
+  stream: ReadableStream<Uint8Array>,
+  manifest: EncryptionManifest,
+  key: CryptoKey,
+  onProgress?: ProgressFn,
+  type = 'application/octet-stream',
+): Promise<Blob> {
+  checkManifest(manifest);
+
+  const ordered = [...manifest.chunks].sort((a, b) => a.index - b.index);
+  const reader = stream.getReader();
+  const pending: Uint8Array[] = [];
+  let buffered = 0;
+  const parts: Uint8Array[] = [];
+  let written = 0;
+
+  // Pull exactly `length` bytes off the stream, or fewer if it ends first.
+  const take = async (length: number): Promise<Uint8Array> => {
+    while (buffered < length) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.length === 0) continue;
+      pending.push(value);
+      buffered += value.length;
+    }
+    const size = Math.min(length, buffered);
+    const first = pending[0];
+    if (first && first.length >= size) {
+      // Common case: one network read already holds the whole chunk.
+      const out = first.subarray(0, size);
+      if (first.length === size) pending.shift();
+      else pending[0] = first.subarray(size);
+      buffered -= size;
+      return out;
+    }
+    const out = new Uint8Array(size);
+    let filled = 0;
+    while (filled < size) {
+      const piece = pending[0]!;
+      const n = Math.min(piece.length, size - filled);
+      out.set(piece.subarray(0, n), filled);
+      filled += n;
+      if (n === piece.length) pending.shift();
+      else pending[0] = piece.subarray(n);
+    }
+    buffered -= size;
+    return out;
+  };
+
+  try {
+    for (let i = 0; i < ordered.length; i++) {
+      const chunk = ordered[i]!;
+      const slice = await take(chunk.ciphertextLength);
+      if (slice.length !== chunk.ciphertextLength) {
+        throw new Error(
+          `Ciphertext truncated at chunk ${chunk.index}: expected ` +
+            `${chunk.ciphertextLength} bytes, got ${slice.length}`,
+        );
+      }
+
+      // Throws OperationError on a wrong key or a tampered byte - see
+      // decryptFile for why this is deliberately not caught.
+      const decrypted = new Uint8Array(
+        await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: base64ToBytes(chunk.iv) as BufferSource, tagLength: TAG_LENGTH },
+          key,
+          slice as BufferSource,
+        ),
+      );
+      parts.push(decrypted);
+      written += decrypted.length;
+      onProgress?.((i + 1) / ordered.length);
+    }
+  } finally {
+    // Release the connection whether we finished, failed or stopped early.
+    await reader.cancel().catch(() => undefined);
+  }
+
+  if (written !== manifest.plaintextSize) {
+    throw new Error(`Decrypted size mismatch: expected ${manifest.plaintextSize}, got ${written}`);
+  }
+
+  return new Blob(parts as BlobPart[], { type });
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +555,7 @@ export async function decryptMetadata<T = unknown>(
 }
 
 // ---------------------------------------------------------------------------
-// Object keys and filename hashing
+// Object keys
 // ---------------------------------------------------------------------------
 
 /**
@@ -384,19 +571,10 @@ export function generateObjectKey(userId: string): string {
   return `${userId}/${hex}`;
 }
 
-/**
- * Blind index over a filename, for duplicate detection without revealing the
- * name. Salted with the per-user salt so the digest cannot be compared against
- * a precomputed dictionary of common filenames.
- */
-export async function hashFilename(filename: string, salt: Uint8Array): Promise<string> {
-  const nameBytes = new TextEncoder().encode(filename);
-  const input = new Uint8Array(salt.length + nameBytes.length);
-  input.set(salt, 0);
-  input.set(nameBytes, salt.length);
-  const digest = await crypto.subtle.digest('SHA-256', input as BufferSource);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-}
+// There is deliberately NO filename blind index. One existed (SHA-256 of the
+// per-user KDF salt + name), but that salt is stored server-side, so a hostile
+// server could test "passport.pdf" at the cost of one hash per guess - and no
+// feature ever read the digest. Removed rather than repaired.
 
 // ---------------------------------------------------------------------------
 // Recovery code
@@ -436,7 +614,53 @@ export async function wrapKeyWithRecoveryCode(
   recoveryCode: string,
   salt: Uint8Array,
 ): Promise<string> {
-  const wrappingKey = await deriveKey(recoveryCode.replace(/-/g, ''), salt);
+  return wrapKeyWithSecret(key, recoveryCode.replace(/-/g, ''), salt);
+}
+
+export async function unwrapKeyWithRecoveryCode(
+  wrappedPayload: string,
+  recoveryCode: string,
+  salt: Uint8Array,
+  extractable = false,
+): Promise<CryptoKey> {
+  return unwrapKeyWithSecret(
+    wrappedPayload,
+    recoveryCode.replace(/-/g, ''),
+    salt,
+    PBKDF2_ITERATIONS,
+    extractable,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Envelope keys
+// ---------------------------------------------------------------------------
+//
+// The data key encrypts files. It is wrapped - never stored bare - under a key
+// derived from each secret that may open the vault: the passphrase, and the
+// recovery code. Changing a secret rewraps the data key and touches no file.
+
+/** A fresh random data key for a new vault. Extractable so it can be wrapped. */
+export async function generateDataKey(): Promise<CryptoKey> {
+  return crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+    'encrypt',
+    'decrypt',
+  ]);
+}
+
+/**
+ * Wrap `key` under PBKDF2(secret, salt).
+ *
+ * Output: base64(iv || AES-GCM ciphertext of the raw key). `key` must be
+ * extractable; the wrapping key never is.
+ */
+export async function wrapKeyWithSecret(
+  key: CryptoKey,
+  secret: string,
+  salt: Uint8Array,
+  iterations: number = PBKDF2_ITERATIONS,
+): Promise<string> {
+  const wrappingKey = await deriveKey(secret, salt, iterations);
   const raw = await crypto.subtle.exportKey('raw', key);
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
   const wrapped = new Uint8Array(
@@ -452,13 +676,25 @@ export async function wrapKeyWithRecoveryCode(
   return bytesToBase64(combined);
 }
 
-export async function unwrapKeyWithRecoveryCode(
+/**
+ * Reverse `wrapKeyWithSecret`. Throws on a wrong secret: GCM authenticates the
+ * wrapped key, so a bad passphrase can never yield a plausible-looking key.
+ *
+ * `extractable` is true only when the caller must rewrap the key (changing the
+ * passphrase, finishing a recovery). The session key stays non-extractable.
+ */
+export async function unwrapKeyWithSecret(
   wrappedPayload: string,
-  recoveryCode: string,
+  secret: string,
   salt: Uint8Array,
+  iterations: number = PBKDF2_ITERATIONS,
+  extractable = false,
 ): Promise<CryptoKey> {
-  const wrappingKey = await deriveKey(recoveryCode.replace(/-/g, ''), salt);
+  const wrappingKey = await deriveKey(secret, salt, iterations);
   const combined = base64ToBytes(wrappedPayload);
+  if (combined.length <= IV_LENGTH) {
+    throw new Error('Wrapped key too short to contain an IV and ciphertext');
+  }
   const iv = combined.subarray(0, IV_LENGTH);
   const body = combined.subarray(IV_LENGTH);
   const raw = await crypto.subtle.decrypt(
@@ -466,6 +702,18 @@ export async function unwrapKeyWithRecoveryCode(
     wrappingKey,
     body as BufferSource,
   );
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, extractable, [
+    'encrypt',
+    'decrypt',
+  ]);
+}
+
+/**
+ * A non-extractable copy of an extractable key, for holding in the session.
+ * Used after a rewrap, so the key kept in memory cannot be serialised out.
+ */
+export async function toSessionKey(key: CryptoKey): Promise<CryptoKey> {
+  const raw = await crypto.subtle.exportKey('raw', key);
   return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM', length: 256 }, false, [
     'encrypt',
     'decrypt',

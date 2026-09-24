@@ -46,17 +46,19 @@ export function proxy(request: NextRequest) {
   // without each needing its own nonce, which is what makes this workable with
   // a bundler that code-splits.
   //
-  // style-src keeps 'unsafe-inline' rather than a nonce: React sets a handful
-  // of dynamic style ATTRIBUTES (meter widths, gauge colours) that a nonce
-  // cannot cover, and a style attribute cannot execute script. See
-  // SECURITY-NOTES.md.
+  // Styles: stylesheets and <style> elements come from 'self' only. The one
+  // exception is style ATTRIBUTES (`style-src-attr`), because React sets a
+  // handful of genuinely dynamic values - meter widths, gauge colours - through
+  // the style prop, which a nonce cannot cover. A style attribute cannot run
+  // script. See SECURITY-NOTES.md.
   //
   // connect-src allows Supabase only — the API, realtime, and Storage signed
   // upload/download URLs all live under *.supabase.co.
   const csp = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self'",
+    "style-src-attr 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self'",
     "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
@@ -88,7 +90,7 @@ export const config = {
       // Static assets and API routes need no CSP: assets execute nothing, and
       // API responses are JSON. Excluding them also avoids paying for a proxy
       // invocation on every chunk request.
-      source: '/((?!api|_next/static|_next/image|favicon.ico|icon-|apple-touch-icon|manifest.webmanifest|sw.js).*)',
+      source: '/((?!api|_next/static|_next/image|favicon.ico|icon-|apple-touch-icon|manifest.webmanifest).*)',
       missing: [
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },

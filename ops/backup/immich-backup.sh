@@ -167,7 +167,26 @@ fi
 rm -f "$STATE_DIR/size-check.json"
 
 log "running restic backup"
-restic backup "$MEDIA_DIR" \
+# The Insta360 archive's ledger rides along. uploaded.sha256 is the ONLY record
+# of what Telegram holds - hashes, sizes and message ids (docs/RUNBOOK.md) -
+# and it lived on this one VM with nothing but a manual phone scp behind it.
+# A few KB, deduplicated by restic, at the unit's idle I/O priority: it costs the
+# drain nothing. Missing files are skipped, never an error - a VM with no
+# archive pipeline must still back up Immich.
+#
+# `if`, not `[[ ]] &&`: under set -e with an ERR trap, a false test as the last
+# command of a loop body is exactly the kind of edge this script cannot afford.
+ARCHIVE_EXTRA=()
+for p in ${ARCHIVE_LEDGER_FILES:-/var/lib/insta360-archive/work/uploaded.sha256 /var/lib/insta360-archive/manifest.sha256}; do
+  if [[ -r "$p" ]]; then
+    ARCHIVE_EXTRA+=("$p")
+  fi
+done
+if (( ${#ARCHIVE_EXTRA[@]} > 0 )); then
+  log "including archive ledger: ${ARCHIVE_EXTRA[*]}"
+fi
+
+restic backup "$MEDIA_DIR" "${ARCHIVE_EXTRA[@]}" \
   --exclude "$MEDIA_DIR/thumbs" \
   --exclude "$MEDIA_DIR/encoded-video" \
   --exclude '*.mp4' \

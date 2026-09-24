@@ -12,17 +12,20 @@
  *   7. browser PUTs ciphertext DIRECTLY to storage — never through Vercel
  *   8. browser records metadata via /api/files
  *
- * Download is the mirror image with a signed GET and per-chunk decryption.
+ * Steps 3 and 4-6 run concurrently: the ciphertext size is deterministic, so
+ * the upload URL is fetched while the file encrypts.
+ *
+ * Download is the mirror image with a signed GET, decrypting each chunk as it
+ * arrives.
  */
 
 import {
-  encryptFile,
-  decryptFile,
+  ciphertextSizeFor,
+  encryptBlob,
+  decryptStream,
   encryptMetadata,
   decryptMetadata,
   generateObjectKey,
-  hashFilename,
-  base64ToBytes,
   type EncryptionManifest,
 } from './crypto';
 
@@ -56,8 +59,17 @@ export interface TransferProgress {
   fraction: number;
 }
 
-async function readFileBytes(file: File): Promise<Uint8Array> {
-  return new Uint8Array(await file.arrayBuffer());
+async function requestUploadUrl(objectKey: string, size: number): Promise<string> {
+  const res = await fetch('/api/presign-upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ objectKey, size }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error ?? `Could not get an upload URL (${res.status})`);
+  }
+  return ((await res.json()) as { url: string }).url;
 }
 
 /**
@@ -69,30 +81,36 @@ export async function uploadFile(
   file: File,
   key: CryptoKey,
   userId: string,
-  saltB64: string,
   onProgress?: (p: TransferProgress) => void,
 ): Promise<{ objectKey: string }> {
-  // --- 3. Encrypt in chunks -----------------------------------------------
-  const plaintext = await readFileBytes(file);
-  const { ciphertext, manifest } = await encryptFile(plaintext, key, (fraction) =>
-    onProgress?.({ stage: 'encrypting', fraction }),
-  );
-
   const objectKey = generateObjectKey(userId);
+  const size = ciphertextSizeFor(file.size);
 
-  // --- 4/5/6. Ask for a presigned PUT -------------------------------------
-  const presignRes = await fetch('/api/presign-upload', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ objectKey, size: ciphertext.byteLength }),
-  });
+  // --- 3 and 4/5/6 CONCURRENTLY ------------------------------------------
+  // The ciphertext size is known before encrypting (one GCM tag per chunk), so
+  // the upload URL is requested while the file encrypts instead of after it.
+  // If the request fails - quota, auth - encryption is aborted rather than
+  // finished for nothing.
+  const abort = new AbortController();
+  const urlRequest = requestUploadUrl(objectKey, size);
+  urlRequest.catch(() => abort.abort());
 
-  if (!presignRes.ok) {
-    const detail = (await presignRes.json().catch(() => ({}))) as { error?: string };
-    throw new Error(detail.error ?? `Could not get an upload URL (${presignRes.status})`);
+  const [url, { body, manifest }] = await Promise.all([
+    urlRequest,
+    // Chunk by chunk from the File: the whole plaintext is never in memory.
+    encryptBlob(
+      file,
+      key,
+      (fraction) => onProgress?.({ stage: 'encrypting', fraction }),
+      abort.signal,
+    ),
+  ]);
+
+  if (body.size !== size) {
+    // The quota check and the bucket limit were applied to `size`. Never send a
+    // body that differs from what was authorised.
+    throw new Error(`Ciphertext is ${body.size} bytes, expected ${size}`);
   }
-
-  const { url } = (await presignRes.json()) as { url: string; token: string };
 
   // --- 7. PUT ciphertext DIRECTLY to storage -------------------------------
   // This fetch goes to Supabase Storage, not to our own origin. File bytes
@@ -104,9 +122,7 @@ export async function uploadFile(
 
   const putRes = await fetch(url, {
     method: 'PUT',
-    // Cast: BodyInit accepts a BufferSource, and this avoids copying the
-    // ciphertext a second time on a memory-constrained phone.
-    body: ciphertext as unknown as BodyInit,
+    body,
     headers: {
       'Content-Type': 'application/octet-stream',
       // Supabase rejects an upload to an existing key unless upsert is set.
@@ -134,13 +150,12 @@ export async function uploadFile(
     contentType: file.type || 'application/octet-stream',
     tags: [],
     notes: '',
-    plaintextSize: plaintext.byteLength,
+    plaintextSize: file.size,
   };
 
-  const [encryptedMetadata, encryptedManifest, filenameHash] = await Promise.all([
+  const [encryptedMetadata, encryptedManifest] = await Promise.all([
     encryptMetadata(metadata, key),
     encryptMetadata(manifest, key),
-    hashFilename(file.name, base64ToBytes(saltB64)),
   ]);
 
   const recordRes = await fetch('/api/files', {
@@ -150,8 +165,7 @@ export async function uploadFile(
       objectKey,
       encryptedMetadata,
       encryptedManifest,
-      filenameHash,
-      sizeBytes: ciphertext.byteLength,
+      sizeBytes: size,
     }),
   });
 
@@ -168,52 +182,60 @@ export async function uploadFile(
   return { objectKey };
 }
 
-/** Download, decrypt and return the plaintext bytes plus metadata. */
+async function requestDownloadUrl(objectKey: string): Promise<string> {
+  const res = await fetch('/api/presign-download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ objectKey }),
+  });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(detail.error ?? `Could not get a download URL (${res.status})`);
+  }
+  return ((await res.json()) as { url: string }).url;
+}
+
+/** Download and decrypt one file, returning the plaintext as a Blob. */
 export async function downloadFile(
   file: VaultFile,
   key: CryptoKey,
   onProgress?: (p: TransferProgress) => void,
-): Promise<{ bytes: Uint8Array; metadata: FileMetadata }> {
-  const presignRes = await fetch('/api/presign-download', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ objectKey: file.object_key }),
-  });
-
-  if (!presignRes.ok) {
-    const detail = (await presignRes.json().catch(() => ({}))) as { error?: string };
-    throw new Error(detail.error ?? `Could not get a download URL (${presignRes.status})`);
-  }
-
-  const { url } = (await presignRes.json()) as { url: string };
+): Promise<{ blob: Blob; metadata: FileMetadata }> {
+  // The URL request and the metadata decryption are independent, so they run
+  // together. A wrong key also fails here, before any ciphertext is fetched.
+  const [url, [metadata, manifest]] = await Promise.all([
+    requestDownloadUrl(file.object_key),
+    Promise.all([
+      decryptMetadata<FileMetadata>(file.encrypted_metadata, key),
+      decryptMetadata<EncryptionManifest>(file.encrypted_manifest, key),
+    ]),
+  ]);
 
   onProgress?.({ stage: 'downloading', fraction: 0 });
   const objectRes = await fetch(url);
   if (!objectRes.ok) throw new Error(`Download failed (${objectRes.status})`);
 
-  const ciphertext = new Uint8Array(await objectRes.arrayBuffer());
-  onProgress?.({ stage: 'downloading', fraction: 1 });
-
-  const [metadata, manifest] = await Promise.all([
-    decryptMetadata<FileMetadata>(file.encrypted_metadata, key),
-    decryptMetadata<EncryptionManifest>(file.encrypted_manifest, key),
-  ]);
-
-  const bytes = await decryptFile(ciphertext, manifest, key, (fraction) =>
-    onProgress?.({ stage: 'decrypting', fraction }),
+  // Decrypt chunk by chunk as the bytes arrive, so decryption overlaps the
+  // network rather than starting after the last byte lands.
+  const stream = objectRes.body ?? new Blob([await objectRes.arrayBuffer()]).stream();
+  const blob = await decryptStream(
+    stream,
+    manifest,
+    key,
+    (fraction) => onProgress?.({ stage: 'downloading', fraction }),
+    metadata.contentType,
   );
 
-  return { bytes, metadata };
+  return { blob, metadata };
 }
 
 /**
- * Hand decrypted bytes to the user as a download.
+ * Hand a decrypted Blob to the user as a download.
  *
  * The object URL is revoked on the next tick — leaving it live would keep the
  * plaintext resident in memory for the lifetime of the document.
  */
-export function saveToDisk(bytes: Uint8Array, metadata: FileMetadata): void {
-  const blob = new Blob([bytes as unknown as BlobPart], { type: metadata.contentType });
+export function saveToDisk(blob: Blob, metadata: FileMetadata): void {
   const url = URL.createObjectURL(blob);
 
   const anchor = document.createElement('a');

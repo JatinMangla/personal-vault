@@ -47,8 +47,10 @@ export async function serverClient() {
             cookieStore.set(name, value, options);
           }
         } catch {
-          // Called from a Server Component, where cookies are read-only.
-          // Middleware refreshes the session instead, so this is safe to ignore.
+          // Called from a Server Component, where cookies are read-only. Safe to
+          // ignore: proxy.ts does NOT refresh sessions, but the browser client
+          // refreshes its own token and rewrites these cookies on page load,
+          // before any API call is made.
         }
       },
     },
@@ -58,8 +60,14 @@ export async function serverClient() {
 /**
  * Service-role client. **BYPASSES ROW LEVEL SECURITY.**
  *
- * Used in exactly one place: /api/metrics/ingest, which authenticates by HMAC
- * rather than a user session and must write a row that no user owns.
+ * Used in exactly two places:
+ *   - /api/metrics/ingest, which authenticates by HMAC rather than a session
+ *     and must write a row that no user owns
+ *   - lib/storage.ts, to sign upload/download URLs and delete objects - ALWAYS
+ *     after the calling route has authenticated the user and `isKeyOwnedBy`
+ *     has confirmed the object key sits in that user's namespace. Storage has
+ *     no RLS policies for users at all (migration 0005), so this is the only
+ *     path to a blob.
  *
  * Never use this to serve user-scoped data — doing so silently disables every
  * access control in the database.

@@ -24,14 +24,14 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history. Depth 1 would miss a secret in an earlier commit,
           # which is exactly the case that matters.
           fetch-depth: 0
 
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,9 +71,9 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           cache: npm
@@ -93,7 +93,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: shellcheck
         # These scripts run unattended on a remote box; a bug surfaces as a
@@ -171,6 +171,19 @@ jobs:
         # positive "needBytes 0 / state idle" shortens the wait, and that
         # unreachable, mid-transfer and unparsable all wait the full window.
         run: bash ops/insta360-bin/test-idle-wait.sh
+
+      - name: Python scripts compile
+        # Several ops scripts (the probes) have no fixtures and are authored on a
+        # machine without Python. Byte-compiling catches a syntax error here
+        # rather than on the VM, mid-drain.
+        run: python3 -m py_compile ops/insta360-bin/*.py
+
+      - name: Metrics payload JSON-safety fixtures
+        # The metrics payload is a heredoc: one unescaped quote or a non-number
+        # makes the body invalid, ingest answers 400, and every figure on
+        # /status goes stale at once. These pin the escaping, and that every
+        # interpolated field is in the sanitised lists.
+        run: bash ops/metrics/test-payload-json.sh
 
       - name: Parallel fetcher fixtures
         # tg-fetch-par.py runs INSIDE the integrity chain, between the upload

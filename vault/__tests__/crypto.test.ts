@@ -21,7 +21,9 @@ import {
   generateSalt,
   generateObjectKey,
   generateRecoveryCode,
-  hashFilename,
+  ciphertextSizeFor,
+  encryptBlob,
+  decryptStream,
   encryptMetadata,
   decryptMetadata,
   wrapKeyWithRecoveryCode,
@@ -492,7 +494,7 @@ describe('recovery code', () => {
 
 // ---------------------------------------------------------------------------
 
-describe('object keys and filename hashing', () => {
+describe('object keys', () => {
   it('scopes object keys to the user and never repeats them', () => {
     const keys = new Set(Array.from({ length: 500 }, () => generateObjectKey('user-123')));
     expect(keys.size).toBe(500);
@@ -505,25 +507,114 @@ describe('object keys and filename hashing', () => {
   it('does not leak the filename into the object key', () => {
     expect(generateObjectKey('user-123')).not.toContain('pdf');
   });
+});
 
-  it('hashes filenames deterministically per salt', async () => {
-    const salt = generateSalt();
-    const a = await hashFilename('Passport Scan.pdf', salt);
-    const b = await hashFilename('Passport Scan.pdf', salt);
-    expect(a).toBe(b);
-    expect(a).toHaveLength(64);
-    expect(a).not.toContain('Passport');
+// ---------------------------------------------------------------------------
+
+/** A stream that delivers `bytes` in pieces of `pieceSize`, like a network. */
+function streamOf(bytes: Uint8Array, pieceSize: number): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(bytes.slice(offset, offset + pieceSize));
+      offset += pieceSize;
+    },
+  });
+}
+
+/** Byte equality via Buffer: expect().toEqual on megabytes is unusably slow. */
+function same(a: Uint8Array, b: Uint8Array): boolean {
+  return Buffer.from(a).equals(Buffer.from(b));
+}
+
+async function blobBytes(blob: Blob): Promise<Uint8Array> {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+describe('streaming transfer path (encryptBlob / decryptStream)', () => {
+  const salt = generateSalt();
+  const sizes: Array<[string, number]> = [
+    ['zero bytes', 0],
+    ['one byte', 1],
+    ['exactly one chunk', CHUNK_SIZE],
+    ['one chunk plus one byte', CHUNK_SIZE + 1],
+    ['two and a half chunks', CHUNK_SIZE * 2 + CHUNK_SIZE / 2],
+  ];
+
+  it('predicts the ciphertext size exactly, so the URL can be fetched early', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    for (const [, size] of sizes) {
+      const { body } = await encryptBlob(new Blob([fillPattern(size)]), key);
+      expect(body.size).toBe(ciphertextSizeFor(size));
+    }
   });
 
-  it('gives different digests under different salts', async () => {
-    const a = await hashFilename('Passport Scan.pdf', generateSalt());
-    const b = await hashFilename('Passport Scan.pdf', generateSalt());
-    expect(a).not.toBe(b);
+  for (const [label, size] of sizes) {
+    it(`round-trips ${label} through odd-sized network pieces`, async () => {
+      const key = await keyFor(PASSPHRASE, salt);
+      const plain = fillPattern(size);
+      const { body, manifest } = await encryptBlob(new Blob([plain]), key);
+      // 1000-byte pieces never line up with the 4 MB + 16 chunk boundaries.
+      const out = await decryptStream(streamOf(await blobBytes(body), 1000), manifest, key);
+      expect(same(await blobBytes(out), plain)).toBe(true);
+    });
+  }
+
+  it('is wire-compatible with the whole-buffer functions in both directions', async () => {
+    // Files already stored were written by encryptFile; they must still open,
+    // and anything the new path writes must open with the old reader too.
+    const key = await keyFor(PASSPHRASE, salt);
+    const plain = fillPattern(CHUNK_SIZE + 12345);
+
+    const old = await encryptFile(plain, key);
+    const viaStream = await decryptStream(streamOf(old.ciphertext, 65536), old.manifest, key);
+    expect(same(await blobBytes(viaStream), plain)).toBe(true);
+
+    const fresh = await encryptBlob(new Blob([plain]), key);
+    expect(same(await decryptFile(await blobBytes(fresh.body), fresh.manifest, key), plain)).toBe(true);
   });
 
-  it('gives different digests for different filenames', async () => {
-    const salt = generateSalt();
-    expect(await hashFilename('a.pdf', salt)).not.toBe(await hashFilename('b.pdf', salt));
+  it('draws a distinct IV for every chunk', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    const { manifest } = await encryptBlob(new Blob([fillPattern(CHUNK_SIZE * 3)]), key);
+    expect(new Set(manifest.chunks.map((c) => c.iv)).size).toBe(3);
+  });
+
+  it('rejects a flipped byte mid-stream', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    const { body, manifest } = await encryptBlob(new Blob([fillPattern(CHUNK_SIZE + 10)]), key);
+    const bytes = await blobBytes(body);
+    bytes[CHUNK_SIZE + 20]! ^= 0x01;
+    await expect(decryptStream(streamOf(bytes, 4096), manifest, key)).rejects.toThrow();
+  });
+
+  it('rejects a stream that ends early', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    const { body, manifest } = await encryptBlob(new Blob([fillPattern(CHUNK_SIZE + 10)]), key);
+    const bytes = (await blobBytes(body)).subarray(0, CHUNK_SIZE + 5);
+    await expect(decryptStream(streamOf(bytes, 4096), manifest, key)).rejects.toThrow(/truncated/);
+  });
+
+  it('rejects the wrong key', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    const wrong = await keyFor(OTHER_PASSPHRASE, salt);
+    const { body, manifest } = await encryptBlob(new Blob([fillPattern(100)]), key);
+    await expect(
+      decryptStream(streamOf(await blobBytes(body), 64), manifest, wrong),
+    ).rejects.toThrow();
+  });
+
+  it('stops encrypting when aborted', async () => {
+    const key = await keyFor(PASSPHRASE, salt);
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      encryptBlob(new Blob([fillPattern(CHUNK_SIZE * 2)]), key, undefined, abort.signal),
+    ).rejects.toThrow();
   });
 });
 

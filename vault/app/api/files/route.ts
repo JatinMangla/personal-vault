@@ -2,8 +2,8 @@
  * /api/files — the encrypted metadata index.
  *
  * GET    list the caller's files (ciphertext metadata; the browser decrypts)
- * POST   record a file after its ciphertext has landed in R2
- * DELETE remove a file row and then its R2 object
+ * POST   record a file after its ciphertext has landed in Storage
+ * DELETE remove a file row and then its stored object
  *
  * Everything stored here that could identify a document is encrypted
  * client-side. What is in the clear is only what quota enforcement and
@@ -34,16 +34,20 @@ export async function GET() {
   // for a personal vault of a few thousand files the ciphertext metadata is
   // small enough to decrypt in memory, which is what makes client-side search
   // viable without ever giving the server plaintext.
-  const { data, error } = await supabase
-    .from('files')
-    .select('id, object_key, encrypted_metadata, encrypted_manifest, size_bytes, created_at, updated_at')
-    .order('created_at', { ascending: false });
+  //
+  // The list and the quota are independent, so they run concurrently: each is
+  // a round trip to Supabase, and awaiting them in turn paid for two.
+  const [{ data, error }, { data: usedBytes }] = await Promise.all([
+    supabase
+      .from('files')
+      .select('id, object_key, encrypted_metadata, encrypted_manifest, size_bytes, created_at, updated_at')
+      .order('created_at', { ascending: false }),
+    supabase.rpc('user_storage_bytes'),
+  ]);
 
   if (error) {
     return NextResponse.json({ error: 'Failed to list files' }, { status: 500 });
   }
-
-  const { data: usedBytes } = await supabase.rpc('user_storage_bytes');
 
   return NextResponse.json(
     {
@@ -58,7 +62,6 @@ interface CreateFileBody {
   objectKey?: unknown;
   encryptedMetadata?: unknown;
   encryptedManifest?: unknown;
-  filenameHash?: unknown;
   sizeBytes?: unknown;
 }
 
@@ -89,7 +92,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { objectKey, encryptedMetadata, encryptedManifest, filenameHash, sizeBytes } = body;
+  const { objectKey, encryptedMetadata, encryptedManifest, sizeBytes } = body;
 
   if (typeof objectKey !== 'string' || !objectKey.startsWith(`${user.id}/`)) {
     return NextResponse.json(
@@ -114,7 +117,6 @@ export async function POST(request: Request) {
       object_key: objectKey,
       encrypted_metadata: encryptedMetadata,
       encrypted_manifest: encryptedManifest,
-      filename_hash: typeof filenameHash === 'string' ? filenameHash : null,
       size_bytes: sizeBytes,
     })
     .select('id, object_key, created_at')
