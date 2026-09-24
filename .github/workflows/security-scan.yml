@@ -172,6 +172,12 @@ jobs:
         # unreachable, mid-transfer and unparsable all wait the full window.
         run: bash ops/insta360-bin/test-idle-wait.sh
 
+      - name: Check #2 fallback-guard fixtures
+        # full_channel_fits() refuses a whole-channel download that cannot
+        # finish on the volume. On 2026-09-24 the unguarded fallback started
+        # pulling a 162 GB channel onto 111 GB free after one Telegram timeout.
+        run: bash ops/insta360-bin/test-channel-fallback.sh
+
       - name: Python scripts compile
         # Several ops scripts (the probes) have no fixtures and are authored on a
         # machine without Python. Byte-compiling catches a syntax error here

@@ -104,22 +104,32 @@ on_error() {
 }
 trap on_error ERR
 
+# Refuse to run, VISIBLY. An explicit `exit` does not fire the ERR trap, so
+# every refusal below used to leave last-backup-status and healthchecks.io
+# untouched. From 2026-09-17 the free-tier guard refused every night and the
+# dashboard showed the same stale "failed" for eight days, with no alert. A
+# refusal is a failed backup and must be recorded as one.
+refuse() {
+  err "$*"
+  echo "failed $(date -Is) refused: $*" > "$STATE_DIR/last-backup-status"
+  hc "/fail"
+  exit 1
+}
+
 hc "/start"
 log "starting backup of $MEDIA_DIR"
 
 # --- Preflight ------------------------------------------------------------
 
 if [[ ! -d "$MEDIA_DIR" ]]; then
-  err "media directory $MEDIA_DIR does not exist"
-  exit 1
+  refuse "media directory $MEDIA_DIR does not exist"
 fi
 
 # Guard against backing up an unmounted mountpoint. If the block volume failed
 # to attach, $MEDIA_DIR is an empty directory on the boot disk, and backing it
 # up would let restic's retention policy age out the real snapshots.
 if ! mountpoint -q "$MEDIA_DIR"; then
-  err "$MEDIA_DIR is not a mountpoint - the block volume may not be attached. Refusing to run."
-  exit 1
+  refuse "$MEDIA_DIR is not a mountpoint - the block volume may not be attached"
 fi
 
 # Confirm a recent database dump exists. Media without the database is close to
@@ -158,10 +168,9 @@ if restic stats --mode raw-data --json > "$STATE_DIR/size-check.json" 2>/dev/nul
   guard_at=$(( FREE_TIER_BYTES * GUARD_PCT / 100 ))
   log "repository at $(( repo_now / 1048576 )) MiB of $(( FREE_TIER_BYTES / 1048576 )) MiB free tier"
   if (( repo_now > guard_at )); then
-    err "repository has passed ${GUARD_PCT}% of the free tier. Refusing to grow it."
     err "Prune old snapshots or move to a larger target. Oracle deletes ALL objects"
     err "if the tenancy is over its limit when the Free Trial ends."
-    exit 1
+    refuse "repository is $(( repo_now / 1048576 )) MiB, past ${GUARD_PCT}% of the free tier"
   fi
 fi
 rm -f "$STATE_DIR/size-check.json"
@@ -186,7 +195,18 @@ if (( ${#ARCHIVE_EXTRA[@]} > 0 )); then
   log "including archive ledger: ${ARCHIVE_EXTRA[*]}"
 fi
 
+# tg-staging is EXCLUDED. It is the Insta360 drain's working area - tens of GB
+# of footage in transit, plus Check #2's .roundtrip downloads - and none of it
+# is meant for restic: the footage goes to Telegram, and it could never fit the
+# 10 GiB free tier anyway. `*.insv` was not in the video excludes below. What
+# the metrics show: staging held ~69 GB when the 2026-09-17 run started, that
+# run failed ~70 minutes in, and the status never changed again (the guard's
+# silent exit - see refuse()). The exact failing step is in that night's
+# journal. Excluding staging also stops this job reading tens of GB per night
+# on the disk the drain is using - faster for both.
 restic backup "$MEDIA_DIR" "${ARCHIVE_EXTRA[@]}" \
+  --exclude "$MEDIA_DIR/tg-staging" \
+  --exclude '*.insv' \
   --exclude "$MEDIA_DIR/thumbs" \
   --exclude "$MEDIA_DIR/encoded-video" \
   --exclude '*.mp4' \
@@ -221,8 +241,7 @@ if restic check --read-data-subset=1%; then
   log "integrity check passed"
 else
   echo "failed $(date -Is)" > "$STATE_DIR/last-check-status"
-  err "INTEGRITY CHECK FAILED - investigate before trusting this repository"
-  exit 1
+  refuse "INTEGRITY CHECK FAILED - investigate before trusting this repository"
 fi
 
 # --- Record state for the metrics collector -------------------------------
