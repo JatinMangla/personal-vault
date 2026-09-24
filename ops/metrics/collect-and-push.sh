@@ -97,7 +97,41 @@ df_line() {
   fi
 }
 
-json_num() { [[ -n "${1:-}" ]] && echo "$1" || echo 0; }
+# The payload is a heredoc, so every value must be made JSON-safe here. One bad
+# value - a quote in a status line, "N/A" where a number belongs - makes the
+# whole body invalid, the ingest route answers 400, and EVERY figure on the
+# dashboard goes stale at once. Pure bash on purpose: no jq dependency (the
+# collector must keep working without it), and the variables are rewritten IN
+# PLACE through namerefs, so sanitising ~60 fields forks no process at all.
+
+# Each named variable becomes a plain integer or decimal, or 0.
+json_num_vars() {
+  local name
+  for name in "$@"; do
+    local -n _num="$name"
+    [[ "${_num:-}" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || _num=0
+    unset -n _num
+  done
+}
+
+# Each named variable becomes the body of a JSON string: backslash and quote
+# escaped, \n \r \t spelled out, any other control character dropped. The
+# payload supplies the surrounding quotes.
+json_str_vars() {
+  local name s
+  for name in "$@"; do
+    local -n _str="$name"
+    s="${_str:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    s="${s//[$'\001'-$'\037']/}"
+    _str="$s"
+    unset -n _str
+  done
+}
 
 # --- Syncthing ------------------------------------------------------------
 #
@@ -253,12 +287,8 @@ if [[ -r "$DRAIN_STATE" ]]; then
   done < "$DRAIN_STATE"
 fi
 
-# A filename reaches the payload as a JSON string, and `.insv` names come from
-# the camera rather than from us. Strip the two characters that would break the
-# body - a stray quote or backslash makes the whole push fail with a 400 and
-# takes every other figure with it.
-DRAIN_PHASE_FILE="${DRAIN_PHASE_FILE//\\/}"
-DRAIN_PHASE_FILE="${DRAIN_PHASE_FILE//\"/}"
+# The filename comes from the camera rather than from us; json_str_vars() in the
+# payload below escapes it, so it is reported exactly rather than stripped.
 [[ "$DRAIN_PHASE_INDEX" =~ ^[0-9]+$ ]] || DRAIN_PHASE_INDEX=0
 [[ "$DRAIN_PHASE_TOTAL" =~ ^[0-9]+$ ]] || DRAIN_PHASE_TOTAL=0
 ORIGINALS_BYTES=$((UPLOAD_BYTES + LIBRARY_BYTES))
@@ -364,66 +394,83 @@ UPTIME_SECONDS=$(cut -d. -f1 /proc/uptime)
 
 TIMESTAMP=$(date +%s)
 COLLECTED_AT=$(date -Is)
+HOST_NAME="$(hostname)"
+
+# Every interpolated value is made JSON-safe here, so nothing below can break
+# the body. A variable missing from these two lists is a bug: add it.
+json_str_vars HOST_NAME SYNC_STATE DRAIN_STATUS DRAIN_PHASE DRAIN_PHASE_FILE \
+  STATS_WARNING LAST_BACKUP_STATUS LAST_CHECK_STATUS LAST_DRILL_RESULT \
+  HEALTH_SERVER HEALTH_ML HEALTH_REDIS HEALTH_DB
+json_num_vars BLOCK_TOTAL BLOCK_USED BLOCK_AVAIL BOOT_TOTAL BOOT_USED BOOT_AVAIL \
+  ORIGINALS_BYTES UPLOAD_BYTES LIBRARY_BYTES THUMBS_BYTES ENCODED_BYTES \
+  PROFILE_BYTES STAGING_BYTES BACKUPS_BYTES \
+  SYNC_NEED_BYTES SYNC_NEED_FILES SYNC_GLOBAL_FILES SYNC_LOCAL_FILES \
+  DRAIN_PHASE_INDEX DRAIN_PHASE_TOTAL DRAIN_TOTAL DRAIN_DONE DRAIN_REMAINING \
+  DRAIN_BYTES DRAIN_BYTES_UNKNOWN DRAIN_UPDATED \
+  PHOTO_COUNT VIDEO_COUNT USAGE_PHOTOS USAGE_VIDEOS IMMICH_USAGE FAILED_JOBS \
+  LAST_BACKUP_TS SNAPSHOT_COUNT REPO_BYTES LAST_DRILL_TS \
+  MEM_TOTAL MEM_USED MEM_AVAIL SWAP_TOTAL SWAP_USED LOAD1 LOAD5 LOAD15 UPTIME_SECONDS
+# The two booleans are only ever assigned the literals true/false above.
 
 read -r -d '' PAYLOAD <<JSON || true
 {
   "timestamp": $TIMESTAMP,
   "collected_at": "$COLLECTED_AT",
-  "host": "$(hostname)",
+  "host": "${HOST_NAME}",
   "storage": {
-    "block_total": ${BLOCK_TOTAL:-0},
-    "block_used": ${BLOCK_USED:-0},
-    "block_avail": ${BLOCK_AVAIL:-0},
-    "boot_total": ${BOOT_TOTAL:-0},
-    "boot_used": ${BOOT_USED:-0},
-    "boot_avail": ${BOOT_AVAIL:-0},
-    "originals_bytes": ${ORIGINALS_BYTES:-0},
-    "upload_bytes": ${UPLOAD_BYTES:-0},
-    "library_bytes": ${LIBRARY_BYTES:-0},
-    "thumbs_bytes": ${THUMBS_BYTES:-0},
-    "encoded_video_bytes": ${ENCODED_BYTES:-0},
-    "profile_bytes": ${PROFILE_BYTES:-0},
-    "staging_bytes": ${STAGING_BYTES:-0},
-    "backups_bytes": ${BACKUPS_BYTES:-0}
+    "block_total": ${BLOCK_TOTAL},
+    "block_used": ${BLOCK_USED},
+    "block_avail": ${BLOCK_AVAIL},
+    "boot_total": ${BOOT_TOTAL},
+    "boot_used": ${BOOT_USED},
+    "boot_avail": ${BOOT_AVAIL},
+    "originals_bytes": ${ORIGINALS_BYTES},
+    "upload_bytes": ${UPLOAD_BYTES},
+    "library_bytes": ${LIBRARY_BYTES},
+    "thumbs_bytes": ${THUMBS_BYTES},
+    "encoded_video_bytes": ${ENCODED_BYTES},
+    "profile_bytes": ${PROFILE_BYTES},
+    "staging_bytes": ${STAGING_BYTES},
+    "backups_bytes": ${BACKUPS_BYTES}
   },
   "sync": {
     "state": "${SYNC_STATE}",
-    "need_bytes": ${SYNC_NEED_BYTES:-0},
-    "need_files": ${SYNC_NEED_FILES:-0},
-    "global_files": ${SYNC_GLOBAL_FILES:-0},
-    "local_files": ${SYNC_LOCAL_FILES:-0},
+    "need_bytes": ${SYNC_NEED_BYTES},
+    "need_files": ${SYNC_NEED_FILES},
+    "global_files": ${SYNC_GLOBAL_FILES},
+    "local_files": ${SYNC_LOCAL_FILES},
     "connected": ${SYNC_CONNECTED}
   },
   "archive": {
     "status": "${DRAIN_STATUS}",
     "phase": "${DRAIN_PHASE}",
     "phase_file": "${DRAIN_PHASE_FILE}",
-    "phase_index": $(json_num "$DRAIN_PHASE_INDEX"),
-    "phase_total": $(json_num "$DRAIN_PHASE_TOTAL"),
-    "total": $(json_num "$DRAIN_TOTAL"),
-    "done": $(json_num "$DRAIN_DONE"),
-    "remaining": $(json_num "$DRAIN_REMAINING"),
-    "bytes": $(json_num "$DRAIN_BYTES"),
-    "bytes_unknown": $(json_num "$DRAIN_BYTES_UNKNOWN"),
-    "updated": $(json_num "$DRAIN_UPDATED")
+    "phase_index": ${DRAIN_PHASE_INDEX},
+    "phase_total": ${DRAIN_PHASE_TOTAL},
+    "total": ${DRAIN_TOTAL},
+    "done": ${DRAIN_DONE},
+    "remaining": ${DRAIN_REMAINING},
+    "bytes": ${DRAIN_BYTES},
+    "bytes_unknown": ${DRAIN_BYTES_UNKNOWN},
+    "updated": ${DRAIN_UPDATED}
   },
   "immich": {
-    "photo_count": $(json_num "$PHOTO_COUNT"),
-    "video_count": $(json_num "$VIDEO_COUNT"),
-    "usage_photos": $(json_num "$USAGE_PHOTOS"),
-    "usage_videos": $(json_num "$USAGE_VIDEOS"),
-    "api_disk_figure": $(json_num "$IMMICH_USAGE"),
-    "failed_jobs": $(json_num "$FAILED_JOBS"),
+    "photo_count": ${PHOTO_COUNT},
+    "video_count": ${VIDEO_COUNT},
+    "usage_photos": ${USAGE_PHOTOS},
+    "usage_videos": ${USAGE_VIDEOS},
+    "api_disk_figure": ${IMMICH_USAGE},
+    "failed_jobs": ${FAILED_JOBS},
     "api_ok": ${API_OK},
     "api_warning": "${STATS_WARNING}"
   },
   "backup": {
-    "last_backup_ts": ${LAST_BACKUP_TS:-0},
+    "last_backup_ts": ${LAST_BACKUP_TS},
     "last_backup_status": "${LAST_BACKUP_STATUS}",
-    "snapshot_count": ${SNAPSHOT_COUNT:-0},
-    "repo_bytes": ${REPO_BYTES:-0},
+    "snapshot_count": ${SNAPSHOT_COUNT},
+    "repo_bytes": ${REPO_BYTES},
     "last_check_status": "${LAST_CHECK_STATUS}",
-    "last_drill_ts": ${LAST_DRILL_TS:-0},
+    "last_drill_ts": ${LAST_DRILL_TS},
     "last_drill_result": "${LAST_DRILL_RESULT}"
   },
   "containers": {
@@ -433,15 +480,15 @@ read -r -d '' PAYLOAD <<JSON || true
     "database": "${HEALTH_DB}"
   },
   "system": {
-    "mem_total": ${MEM_TOTAL:-0},
-    "mem_used": ${MEM_USED:-0},
-    "mem_available": ${MEM_AVAIL:-0},
-    "swap_total": ${SWAP_TOTAL:-0},
-    "swap_used": ${SWAP_USED:-0},
-    "load1": ${LOAD1:-0},
-    "load5": ${LOAD5:-0},
-    "load15": ${LOAD15:-0},
-    "uptime_seconds": ${UPTIME_SECONDS:-0}
+    "mem_total": ${MEM_TOTAL},
+    "mem_used": ${MEM_USED},
+    "mem_available": ${MEM_AVAIL},
+    "swap_total": ${SWAP_TOTAL},
+    "swap_used": ${SWAP_USED},
+    "load1": ${LOAD1},
+    "load5": ${LOAD5},
+    "load15": ${LOAD15},
+    "uptime_seconds": ${UPTIME_SECONDS}
   }
 }
 JSON
