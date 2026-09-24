@@ -38,20 +38,26 @@ Fixed in `8c4a829` — by-id retries after 120 s and 300 s
 archive + batch + margin actually fit. Otherwise Check #2 fails with staging
 kept and the drain retries. Fixtures: `test-channel-fallback.sh`.
 
-**2. The Syncthing scan rate was not 5.3 MB/s.**
+**2. The Syncthing scan rate: 5.3 MB/s is UNPROVEN, not disproven.**
 
-The "Syncthing slow scan" section below concludes the fix was pruning rather
-than tuning. **The pruning conclusion stands** — 49 GB of already-archived
-footage on the card was real, and removing it was right. But the 5.3 MB/s figure
-behind it was wrong: on 2026-09-24 the phone measured **15 MB/s whenever
-connected**, and the apparent slowness was the phone being *disconnected*
-21:10–23:30 IST by Android battery settings.
+> **Corrected 2026-09-25.** The first version of this revision said the 5.3 MB/s
+> "was wrong" because "the phone measured 15 MB/s whenever connected". Both
+> halves were wrong. The 15 MB/s was not a phone measurement: it was the VM's
+> `staging_bytes`, which then included `.roundtrip`, so it was a **Telegram
+> download** growing Check #2's scratch, not Syncthing. It was also a transfer
+> rate on 09-24 being used to overturn a scan rate on 09-19. That is exactly the
+> "number from one context reused in another" failure this file warns about.
 
-So this file added a fourth wrong rate figure to a project whose recurring bug
-is exactly that — a number measured in one context reused in another. The 2.5
-hours was disconnection plus redundant work, not a slow scanner. **`hashers`
-tuning remains correctly unpursued**, for a better reason than the one given
-below.
+What the metrics DO show for 09-19: the phone was disconnected 10:00–12:00,
+14:30–20:00 and 21:30–23:00 IST. A phone-side scan pauses whenever Android kills
+the app, so the reported 2.5 hours may include time the scanner was not running.
+That makes 5.3 MB/s **unproven** rather than wrong. The same data also shows a
+real stall: 5.2 GB `need_bytes` sat unmoved for five days, including hours while
+connected. See `REVIEW-2026-09-24.md`.
+
+**The pruning conclusion stands** — 49 GB of already-archived footage on the
+card was real, and removing it was right. **`hashers` tuning stays unpursued**
+until a clean, connected, uninterrupted scan is measured.
 
 Also found then: `.roundtrip` sits inside the receive-only Syncthing folder, so
 the VM hashes gigabytes it never needs. Add `/.roundtrip` to the VM
@@ -225,10 +231,11 @@ So Syncthing spent 2.5 hours re-hashing 49 GB of footage **already verified in
 Telegram**. After `tg-prune --trust-size --apply` cleared it in 3 seconds, the
 next run went almost straight to transferring — no long scan at all.
 
-> **Revised 2026-09-24 (`8c4a829`).** The pruning conclusion below stands, but
-> the 5.3 MB/s that motivated it was wrong — the phone measured **15 MB/s when
-> connected**, and the apparent slowness was it being disconnected for over two
-> hours by Android battery settings.
+> **Revised 2026-09-24, corrected 2026-09-25.** The pruning conclusion below
+> stands. The 5.3 MB/s that motivated it is **unproven, not wrong**: the phone
+> was disconnected for long stretches that day, which could have paused the
+> scan. The "15 MB/s when connected" once quoted here was a Telegram download
+> misread from `staging_bytes`, not Syncthing. See the note at the top.
 
 **Conclusion: the fix was removing the work, not speeding it up.** `hashers`
 tuning was deliberately not pursued: even tripling the scan rate leaves ~50
