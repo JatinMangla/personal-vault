@@ -24,20 +24,16 @@ import {
 } from '@/lib/transfer';
 import { formatBytes } from '@/lib/thresholds';
 import {
-  bytesToBase64,
-  deriveExtractableKey,
-  generateRecoveryCode,
-  generateSalt,
-  wrapKeyWithRecoveryCode,
-  PBKDF2_ITERATIONS,
-} from '@/lib/crypto';
-import { createVerifier } from '@/components/VaultKeyProvider';
-
-interface KeyMaterial {
-  kdf_salt: string;
-  kdf_iterations: number;
-  passphrase_verifier: string | null;
-}
+  KEY_MATERIAL_COLUMNS,
+  MIN_PASSPHRASE_LENGTH,
+  changePassphrase,
+  createVaultKeys,
+  openVault,
+  recoverVault,
+  type KeyMaterial,
+  type PassphraseWrap,
+} from '@/lib/vault-keys';
+import { ChangePassphraseForm, RecoverForm } from '@/components/PassphraseForms';
 
 export default function FilesPage() {
   const { key, isUnlocked, unlock, lock, isDeriving, error: keyError } = useVaultKey();
@@ -56,6 +52,8 @@ export default function FilesPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newRecoveryCode, setNewRecoveryCode] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [changingPassphrase, setChangingPassphrase] = useState(false);
 
   // --- Session -------------------------------------------------------------
 
@@ -85,7 +83,7 @@ export default function FilesPage() {
 
         const { data: keys, error: keyError } = await supabase
           .from('user_keys')
-          .select('kdf_salt, kdf_iterations, passphrase_verifier')
+          .select(KEY_MATERIAL_COLUMNS)
           .eq('user_id', user.id)
           .maybeSingle();
 
@@ -124,7 +122,14 @@ export default function FilesPage() {
   }, [key]);
 
   useEffect(() => {
-    if (isUnlocked) void loadFiles();
+    if (isUnlocked) {
+      void loadFiles();
+    } else {
+      // Locking - by hand or by the idle timer - drops the key; drop the
+      // decrypted filenames with it, or they outlive the key in memory.
+      setFiles([]);
+      setQuery('');
+    }
   }, [isUnlocked, loadFiles]);
 
   // --- Actions -------------------------------------------------------------
@@ -141,8 +146,8 @@ export default function FilesPage() {
   const handleCreateVault = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!userId) return;
-    if (passphrase.length < 12) {
-      setStatus('Passphrase must be at least 12 characters.');
+    if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
+      setStatus(`Passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
       return;
     }
 
@@ -162,31 +167,17 @@ export default function FilesPage() {
         return;
       }
 
-      const salt = generateSalt();
-      const code = generateRecoveryCode();
-      const extractable = await deriveExtractableKey(passphrase, salt);
-
-      const [wrapped, verifier] = await Promise.all([
-        wrapKeyWithRecoveryCode(extractable, code, salt),
-        createVerifier(extractable),
-      ]);
-
-      const { error: insertError } = await supabase.from('user_keys').insert({
-        user_id: userId,
-        kdf_salt: bytesToBase64(salt),
-        kdf_iterations: PBKDF2_ITERATIONS,
-        recovery_wrapped_key: wrapped,
-        passphrase_verifier: verifier,
-      });
+      const { row, recoveryCode, sessionKey } = await createVaultKeys(passphrase);
+      const { error: insertError } = await supabase
+        .from('user_keys')
+        .insert({ user_id: userId, ...row });
       if (insertError) throw insertError;
 
-      // Shown once. Surface it before unlocking so it cannot be missed.
-      setNewRecoveryCode(code);
-      setKeyMaterial({
-        kdf_salt: bytesToBase64(salt),
-        kdf_iterations: PBKDF2_ITERATIONS,
-        passphrase_verifier: verifier,
-      });
+      // Shown once. The vault is opened with the key already in hand, so there
+      // is no second passphrase entry and no second PBKDF2 wait.
+      setNewRecoveryCode(recoveryCode);
+      setKeyMaterial(row);
+      await unlock(async () => sessionKey);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Could not create the vault.');
     } finally {
@@ -194,21 +185,59 @@ export default function FilesPage() {
     }
   };
 
+  /** Persist a new passphrase wrapping. Returns false rather than throwing. */
+  const saveWrap = async (wrap: PassphraseWrap): Promise<boolean> => {
+    if (!userId) return false;
+    const { error } = await browserClient().from('user_keys').update(wrap).eq('user_id', userId);
+    if (error) return false;
+    setKeyMaterial((km) => (km ? { ...km, ...wrap } : km));
+    return true;
+  };
+
   const handleUnlock = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!keyMaterial) return;
     try {
-      await unlock(
-        passphrase,
-        keyMaterial.kdf_salt,
-        keyMaterial.kdf_iterations,
-        keyMaterial.passphrase_verifier,
-      );
+      await unlock(async () => {
+        const { key: opened, upgrade } = await openVault(passphrase, keyMaterial);
+        // A pre-envelope account: save its passphrase wrapping in the
+        // background. The vault is already open; nothing waits on this, and if
+        // it fails the account simply stays on the old path until next time.
+        if (upgrade) void upgrade.then(saveWrap).catch(() => undefined);
+        return opened;
+      });
+    } catch {
+      // Surfaced by the provider as keyError.
     } finally {
       // Clear the passphrase from component state either way. It is never
       // stored, logged or transmitted.
       setPassphrase('');
     }
+  };
+
+  const handleRecover = async (code: string, newPassphrase: string) => {
+    if (!keyMaterial) return;
+    setStatus(null);
+    await unlock(async () => {
+      const { key: opened, wrap } = await recoverVault(code, newPassphrase, keyMaterial);
+      if (!(await saveWrap(wrap))) {
+        // The vault still opens for this session - refusing would strand the
+        // owner - but say plainly that the new passphrase did not stick.
+        setStatus(
+          'Recovered, but the new passphrase could not be saved. Use the recovery code again next time, or change the passphrase from the Documents screen.',
+        );
+      }
+      return opened;
+    });
+    setRecovering(false);
+  };
+
+  const handleChangePassphrase = async (current: string, next: string) => {
+    if (!keyMaterial) return;
+    const wrap = await changePassphrase(current, next, keyMaterial);
+    if (!(await saveWrap(wrap))) throw new Error('Could not save the new passphrase.');
+    setChangingPassphrase(false);
+    setStatus('Passphrase changed. Your recovery code still works.');
   };
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -217,7 +246,7 @@ export default function FilesPage() {
 
     setStatus(null);
     try {
-      await uploadFile(selected, key, userId, keyMaterial.kdf_salt, setProgress);
+      await uploadFile(selected, key, userId, setProgress);
       setStatus(`Uploaded ${selected.name}`);
       await loadFiles();
     } catch (err) {
@@ -234,13 +263,29 @@ export default function FilesPage() {
     setBusyKey(file.object_key);
     setStatus(null);
     try {
-      const { bytes, metadata } = await downloadFile(file, key, setProgress);
-      saveToDisk(bytes, metadata);
+      const { blob, metadata } = await downloadFile(file, key, setProgress);
+      saveToDisk(blob, metadata);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Download failed');
     } finally {
       setBusyKey(null);
       setProgress(null);
+    }
+  };
+
+  /**
+   * End the session entirely. Lock only forgets the key; the Supabase session
+   * would otherwise stay signed in on this device indefinitely.
+   */
+  const handleSignOut = async () => {
+    lock();
+    setFiles([]);
+    try {
+      await browserClient().auth.signOut();
+    } finally {
+      setKeyMaterial(null);
+      setUserId(null);
+      setStatus(null);
     }
   };
 
@@ -354,6 +399,25 @@ export default function FilesPage() {
     );
   }
 
+  if (!isUnlocked && recovering) {
+    return (
+      <>
+        <h1>Recover your vault</h1>
+        <p className="muted">
+          Enter the recovery code you saved when the vault was created, then choose a
+          new passphrase. Your files are not re-encrypted; only the key that opens them
+          is.
+        </p>
+        <RecoverForm
+          busy={isDeriving}
+          error={keyError}
+          onSubmit={handleRecover}
+          onCancel={() => setRecovering(false)}
+        />
+      </>
+    );
+  }
+
   if (!isUnlocked) {
     return (
       <>
@@ -383,6 +447,16 @@ export default function FilesPage() {
             </div>
           )}
         </form>
+        <div className="row gap-05 wrap mt-1">
+          {keyMaterial.recovery_wrapped_key && (
+            <button type="button" onClick={() => setRecovering(true)}>
+              Forgot passphrase?
+            </button>
+          )}
+          <button type="button" onClick={() => void handleSignOut()}>
+            Sign out
+          </button>
+        </div>
       </>
     );
   }
@@ -393,10 +467,25 @@ export default function FilesPage() {
     <>
       <div className="row between wrap gap-05">
         <h1 className="m-0">Documents</h1>
-        <button type="button" onClick={lock}>
-          Lock
-        </button>
+        <div className="row gap-05 wrap">
+          <button type="button" onClick={lock}>
+            Lock
+          </button>
+          <button type="button" onClick={() => setChangingPassphrase((v) => !v)}>
+            Change passphrase
+          </button>
+          <button type="button" onClick={() => void handleSignOut()}>
+            Sign out
+          </button>
+        </div>
       </div>
+
+      {changingPassphrase && (
+        <ChangePassphraseForm
+          onSubmit={handleChangePassphrase}
+          onCancel={() => setChangingPassphrase(false)}
+        />
+      )}
 
       {quota && (
         <p className="faint">

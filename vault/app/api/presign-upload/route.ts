@@ -5,7 +5,7 @@
  * The browser then uploads ciphertext DIRECTLY to Supabase Storage — bytes
  * never pass through this function.
  *
- * This route sees: a size, a content type, and a filename hash. It never sees
+ * This route sees: a size and an object key. It never sees
  * the filename, the file contents, or the encryption key.
  */
 
@@ -29,7 +29,6 @@ export const dynamic = 'force-dynamic';
 interface PresignUploadBody {
   objectKey?: unknown;
   size?: unknown;
-  filenameHash?: unknown;
 }
 
 export async function POST(request: Request) {

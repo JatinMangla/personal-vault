@@ -224,15 +224,12 @@ test.describe('PWA', () => {
     expect(res.ok()).toBeTruthy();
   });
 
-  test('service worker never caches API responses or ciphertext', async ({ request }) => {
+  test('ships no service worker, so nothing can cache decrypted data', async ({ request }) => {
+    // One existed but was never registered - dead code with a test "verifying"
+    // it. Removed; if one is ever added it must exclude /api/ and cross-origin
+    // ciphertext, and this test should be replaced with one that asserts that.
     const res = await request.get('/sw.js');
-    expect(res.ok()).toBeTruthy();
-
-    const source = await res.text();
-    // A cache surviving logout is a data leak, so the exclusions are asserted
-    // rather than assumed.
-    expect(source).toContain("startsWith('/api/')");
-    expect(source).toContain('self.location.origin');
+    expect(res.status()).toBe(404);
   });
 });
 
@@ -331,5 +328,33 @@ test.describe('hydration and CSP', () => {
     expect(scriptSrc, 'script-src must not allow unsafe-eval').not.toContain("'unsafe-eval'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");
+
+    // Stylesheets and <style> elements: 'self' only. Inline is confined to
+    // style ATTRIBUTES via style-src-attr (see SECURITY-NOTES.md).
+    const styleSrc = /(?:^|;\s*)style-src\s([^;]*)/.exec(csp)?.[1] ?? '';
+    expect(styleSrc, 'style-src must not allow unsafe-inline').not.toContain("'unsafe-inline'");
+  });
+
+  test('dynamic style attributes still apply under the deployed CSP', async ({ page }) => {
+    // The meters and gauges set widths and colours through React's style prop,
+    // and only `style-src-attr 'unsafe-inline'` permits that. A browser that
+    // ignored style-src-attr would fall back to style-src 'self' and silently
+    // drop them - and no signed-out page renders one, so the CSP-violation test
+    // above cannot see it. Serve a probe page under the EXACT header the app
+    // sends and check the attribute took effect.
+    const response = await page.goto('/');
+    const csp = response?.headers()['content-security-policy'] ?? '';
+    expect(csp).toContain('style-src-attr');
+
+    await page.route('**/csp-probe', (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'text/html', 'content-security-policy': csp },
+        body: '<!doctype html><div id="m" style="--fill: 42px; width: var(--fill); height: 5px"></div>',
+      }),
+    );
+    await page.goto('/csp-probe');
+    const width = await page.locator('#m').evaluate((el) => getComputedStyle(el).width);
+    expect(width).toBe('42px');
   });
 });

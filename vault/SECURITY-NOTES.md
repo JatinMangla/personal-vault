@@ -15,7 +15,6 @@ worth taking. Renovate/Dependabot-style bumps should be deliberate and reviewed.
 | `next` | 16.3.4 | First line clearing the high-severity `postcss` advisories (GHSA-r28c-9q8g-f849 and related). Requires Node >= 20.9.0, satisfied here. |
 | `@supabase/supabase-js` | 2.100.0 | Latest release still supporting Node 20. 2.116.0 requires Node >= 22 via `@supabase/storage-js`. |
 | `@supabase/ssr` | 0.7.0 | Peer range `^2.43.4` is compatible with supabase-js 2.100.0. Version 0.12.7 demands supabase-js `^2.114.0`, which forces Node 22. |
-| `@aws-sdk/client-s3` | 3.1128.0 | Clears GHSA-6475-r3vj-m8vf in `@smithy/config-resolver`. |
 | `vitest` | 3.2.7 | See "Known accepted advisories" below. |
 
 ## Known accepted advisories
@@ -63,16 +62,70 @@ security software). `vitest@3.2.7` predates that peer and installs cleanly.
 - Any new accepted advisory gets an entry above with reachability, precondition
   and a revisit trigger. "It's only moderate" is not a reason on its own.
 
+## Key hierarchy (envelope), from 2026-09-24
+
+A data key encrypts every file. It is stored only wrapped, under a key derived
+from each secret that may open the vault (`lib/vault-keys.ts`):
+
+| Column | Wraps the data key under |
+|---|---|
+| `passphrase_wrapped_key` | PBKDF2-SHA256(passphrase, `passphrase_salt`), 600k |
+| `recovery_wrapped_key` | PBKDF2-SHA256(recovery code, `kdf_salt`), 600k |
+
+Changing the passphrase, or recovering with the code, rewraps the data key and
+re-encrypts nothing. Before this, the file key WAS PBKDF2(passphrase), so the
+passphrase could never change, and the recovery code, though it wrapped that
+key, had no screen that used it. The UI promised a backstop that did not exist.
+
+Accounts created before the envelope keep their existing key as the data key.
+The first unlock wraps it for the passphrase in the background. Unlock cost is
+unchanged at one PBKDF2 either way.
+
+**Residual risk, accepted:** `passphrase_verifier` and the wrapped keys sit
+server-side. Anyone holding them (for instance, via a leaked service-role key)
+can guess passphrases offline at 600k PBKDF2 rounds per guess. Passphrase
+strength is the only defence against that; the minimum is 12 characters.
+
+## Least privilege in the database (migrations 0005–0007)
+
+Only what the app actually uses is granted. The RLS test in CI
+(`supabase/tests/rls.test.sql`) asserts each point against a real local Supabase:
+
+- **Storage has no user policies.** Every blob operation goes through
+  `lib/storage.ts` with the service role, after the route has checked the
+  session and the key namespace. A signed-in session can't list, read or write
+  objects directly, so it can't skip the presign route's quota and size checks.
+- **The quota counts real stored bytes** (`storage.objects` metadata), not the
+  client-declared `files.size_bytes`, and orphans count too.
+- **`user_keys` UPDATE is column-scoped** to the two passphrase columns.
+  `kdf_salt`, `recovery_wrapped_key` and `passphrase_verifier` are immutable to
+  clients, so a stolen session can't brick the vault or remove the recovery path.
+- **`files` has no UPDATE** at all.
+- **No filename blind index.** It was salted with the server-stored KDF salt,
+  so it was dictionary-attackable, and nothing read it.
+- **No public sign-up.** The UI offers sign-in only; sign-ups must also be off in
+  Supabase Auth settings (dashboard).
+
 ## Content-Security-Policy: the `style-src-attr` exception
 
-The deployed CSP is:
+The deployed CSP (set per request in `proxy.ts`) is:
 
 ```
-default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; ...
+default-src 'self'; script-src 'self' 'nonce-<per request>' 'strict-dynamic';
+style-src 'self'; style-src-attr 'unsafe-inline'; ...
 ```
 
-`script-src` is `'self'` with **no** `unsafe-inline` and **no** `unsafe-eval`,
-which is what the spec requires and what actually matters for XSS.
+**History, stated plainly:** until 2026-09-24 this section described the policy
+above while `proxy.ts` actually shipped `style-src 'self' 'unsafe-inline'`. The
+docs claimed a control that was not deployed. The code now matches, and two
+e2e tests keep it that way on Chromium and WebKit: one asserts `style-src`
+carries no `unsafe-inline`; the other serves a probe page under the exact
+deployed header and checks a dynamic `style` attribute still applies (a
+negative control without `style-src-attr` was run and fails as it should).
+
+`script-src` has **no** `unsafe-inline` and **no** `unsafe-eval`, which is what
+the spec requires and what actually matters for XSS. Next's inline hydration
+scripts carry the per-request nonce.
 
 `style-src` is also `'self'` with no `unsafe-inline`, so no attacker-supplied
 `<style>` block or stylesheet can load.

@@ -12,8 +12,10 @@
  * are elsewhere and do not depend on this:
  *
  *   - every route requires an authenticated Supabase session
- *   - presigned URLs live 60 seconds and are scoped to one object key
- *   - the R2 quota is checked against the database before any URL is minted
+ *   - signed URLs are scoped to one object key (downloads live 60 s, uploads
+ *     2 h - Supabase fixes the latter; see lib/storage.ts)
+ *   - the storage quota is checked against the real stored bytes before any
+ *     upload URL is minted
  *   - Vercel Hobby pauses a project that exceeds its limits rather than billing
  *
  * A durable limiter would need Redis or Supabase, which adds a dependency and a

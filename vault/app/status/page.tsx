@@ -601,7 +601,7 @@ function FreeTierLedger({
         <LimitMeter key={row.label} {...row} />
       ))}
       <p className="faint">
-        Cloudflare R2 and Supabase usage appear on the Files tab and in the provider
+        Document storage (Supabase) usage appears on the Files tab and in the provider
         dashboards. Total projected cost: <strong>$0.00/year</strong>.
       </p>
     </HealthCard>

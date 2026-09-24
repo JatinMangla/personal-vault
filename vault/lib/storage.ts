@@ -24,7 +24,7 @@ import 'server-only';
 
 import { serviceClient } from './supabase-server';
 
-/** Bucket name. Must be created as a PRIVATE bucket — see supabase/README.md. */
+/** Bucket name. Created PRIVATE by supabase/migrations/0002_storage_bucket.sql. */
 export const STORAGE_BUCKET = 'vault-files';
 
 /**

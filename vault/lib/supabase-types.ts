@@ -12,7 +12,6 @@ export interface FileRow {
   object_key: string;
   encrypted_metadata: string;
   encrypted_manifest: string;
-  filename_hash: string | null;
   size_bytes: number;
   created_at: string;
   updated_at: string;

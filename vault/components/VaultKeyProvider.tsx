@@ -15,12 +15,15 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { deriveKey, base64ToBytes, encryptMetadata, decryptMetadata } from '@/lib/crypto';
 
 interface VaultKeyState {
   key: CryptoKey | null;
   isUnlocked: boolean;
-  unlock: (passphrase: string, saltB64: string, iterations: number, verifier: string | null) => Promise<void>;
+  /**
+   * Run `open` (which derives or unwraps the key - see lib/vault-keys.ts) and
+   * hold its result. A throw becomes `error` and is re-thrown.
+   */
+  unlock: (open: () => Promise<CryptoKey>) => Promise<void>;
   lock: () => void;
   /** True while PBKDF2 is running — 600k iterations takes a noticeable moment. */
   isDeriving: boolean;
@@ -28,9 +31,6 @@ interface VaultKeyState {
 }
 
 const VaultKeyContext = createContext<VaultKeyState | null>(null);
-
-/** Constant encrypted under the derived key, to verify a passphrase locally. */
-const VERIFIER_PLAINTEXT = 'personal-vault-verifier-v1';
 
 /** Auto-lock after this long without interaction. */
 const IDLE_LOCK_MS = 30 * 60 * 1000;
@@ -50,26 +50,13 @@ export function VaultKeyProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const unlock = useCallback(
-    async (passphrase: string, saltB64: string, iterations: number, verifier: string | null) => {
+    async (open: () => Promise<CryptoKey>) => {
       setIsDeriving(true);
       setError(null);
       try {
-        const salt = base64ToBytes(saltB64);
-        const derived = await deriveKey(passphrase, salt, iterations);
-
-        // If a verifier exists, check the passphrase now rather than letting the
-        // user discover it was wrong after downloading a file that fails to
-        // decrypt.
-        if (verifier) {
-          try {
-            const value = await decryptMetadata<string>(verifier, derived);
-            if (value !== VERIFIER_PLAINTEXT) throw new Error('mismatch');
-          } catch {
-            throw new Error('Incorrect passphrase');
-          }
-        }
-
-        keyRef.current = derived;
+        // `open` checks the key against the stored verifier, so a wrong
+        // passphrase fails here rather than on the first download.
+        keyRef.current = await open();
         setIsUnlocked(true);
       } catch (err) {
         keyRef.current = null;
@@ -129,9 +116,4 @@ export function useVaultKey(): VaultKeyState {
   const ctx = useContext(VaultKeyContext);
   if (!ctx) throw new Error('useVaultKey must be used inside a VaultKeyProvider');
   return ctx;
-}
-
-/** Build the verifier blob at setup time. */
-export async function createVerifier(key: CryptoKey): Promise<string> {
-  return encryptMetadata(VERIFIER_PLAINTEXT, key);
 }
