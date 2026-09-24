@@ -61,4 +61,6 @@ next action is. Update it at the end of any session that advances a phase.
 
 Reading order for a new session: this file → `docs/BUILD-STATE.md` →
 `docs/REVIEW-2026-09-24.md` (latest review, open items, deploy order) →
-`docs/HARD-WON.md` before touching the Telegram pipeline.
+`docs/HARD-WON.md` before touching the Telegram pipeline. For the drain's
+speed work specifically, `docs/SESSION-FINDINGS-2026-09-19.md` records how the
+current timings were reached and which predictions the measurements falsified.
