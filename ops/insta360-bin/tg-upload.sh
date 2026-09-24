@@ -581,6 +581,37 @@ roundtrip_watch() {
 rt_ceiling=$(( (archive_bytes + batch_bytes / 2) * 2 ))
 (( rt_ceiling < 20 * GIB )) && rt_ceiling=$(( 20 * GIB ))
 
+# Can a whole-channel download actually FINISH on this volume?
+#
+# The channel holds the archive plus this batch. Once that exceeds the free
+# space, the fallback cannot succeed: on 2026-09-24 one Telegram timeout on a
+# fresh upload sent Check #2 into downloading a 162 GB channel onto a volume
+# with ~111 GB free, at 0.55 MB/s. It would have run for days, held the volume
+# near-full the whole time, and then been aborted by roundtrip_watch anyway.
+# A fallback that cannot finish is worse than none: refuse it, keep staging,
+# and let the drain retry the batch.
+full_channel_fits() {
+  local avail_kb
+  avail_kb="$(df -P "$rt_dir" | awk 'NR==2{print $4}')"
+  [[ "$avail_kb" =~ ^[0-9]+$ ]] || return 1
+  (( archive_bytes + batch_bytes / 2 + margin_bytes < avail_kb * 1024 ))
+}
+
+# Fall back to the whole channel only when it can finish; otherwise fail this
+# Check #2 without deleting anything.
+full_channel_or_refuse() {
+  if full_channel_fits; then
+    log "Check #2 - downloading the whole channel back (slower; grows with the archive)"
+    log "  watching scratch, ceiling $(( rt_ceiling / GIB )) GiB"
+    full_channel_download || roundtrip_ok=0
+  else
+    err "NOT falling back to a full-channel download: the channel (~$(( (archive_bytes + batch_bytes / 2) / GIB )) GiB)"
+    err "  cannot fit in the free space on $(df -P "$rt_dir" | awk 'NR==2{print $6}') with the ${GUARD_MARGIN_GB} GiB margin"
+    err "  staging is kept and nothing is deleted; the drain will retry this batch"
+    roundtrip_ok=0
+  fi
+}
+
 # Run telegram-download under the watchdog. Returns non-zero if the download
 # failed OR the watchdog aborted it.
 full_channel_download() {
@@ -609,8 +640,10 @@ full_channel_download() {
 # The fallback is not a nicety. Files archived before ids were recorded have
 # none, and a build whose --print-file-id output this script failed to parse
 # would have none either. In both cases the old whole-channel path runs and the
-# guarantee is identical - slower, never weaker. Check #2 is the property that
-# makes this archive trustworthy, so it degrades rather than skips.
+# guarantee is identical - slower, never weaker - BUT ONLY WHEN IT CAN FINISH
+# (full_channel_fits). When the channel outgrows the free space, Check #2 fails
+# instead: staging is kept, nothing is deleted, and the drain retries. It never
+# skips verification.
 FETCHER="$HERE/tg-fetch-ids.py"
 fetch_ids=""
 
@@ -639,7 +672,8 @@ PIPX_PY="${PIPX_PY:-$HOME/.local/share/pipx/venvs/telegram-upload/bin/python}"
 # THREE layers stay in front of it, so enabling this cannot cost footage:
 #   1. it exits non-zero on any short or failed file, and this falls through to
 #      the sequential fetcher below
-#   2. that in turn falls back to the full-channel download
+#   2. that retries by id after a pause, then falls back to the full-channel
+#      download only if the channel can fit on the volume
 #   3. Check #2 still hashes every rejoined file against the manifest, and
 #      staging is cleared only if that passes
 PAR_FETCHER="$HERE/tg-fetch-par.py"
@@ -667,19 +701,42 @@ if [[ -n "${fetch_ids// /}" ]]; then
   if (( ! fetched )); then
     # shellcheck disable=SC2086
     log "Check #2 - fetching ${#batch[@]} file(s) by message id (not the whole channel)"
-    if ! ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+    if ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+           --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
+           $fetch_ids >/dev/null ); then
+      fetched=1
+    fi
+
+    # Telegram's "Timeout while fetching data (GetFileRequest)" on a file
+    # uploaded seconds earlier is usually transient: on 2026-09-24 message 244
+    # failed twelve times in three minutes. Waiting and asking again for the
+    # same few ids costs minutes; the whole-channel alternative costs the
+    # archive's size. Each retry starts from an empty scratch directory so
+    # nothing half-written is trusted.
+    for delay in ${TG_FETCH_RETRY_DELAYS:-120 300}; do
+      (( fetched )) && break
+      err "fetch by message id failed - retrying in ${delay}s"
+      sleep "$delay"
+      find "$rt_dir" -mindepth 1 -delete 2>/dev/null || true
+      log "Check #2 - fetching ${#batch[@]} file(s) by message id (retry)"
+      # shellcheck disable=SC2086
+      if ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
              --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
              $fetch_ids >/dev/null ); then
-      err "fetch by message id failed - falling back to a full-channel download"
-      full_channel_download || roundtrip_ok=0
+        fetched=1
+      fi
+    done
+
+    if (( ! fetched )); then
+      err "fetch by message id failed after retries"
+      find "$rt_dir" -mindepth 1 -delete 2>/dev/null || true
+      full_channel_or_refuse
     fi
   fi
 else
-  (( ids_complete )) || err "some files reported no message id - using a full-channel download"
-  [[ -r "$FETCHER" ]] || err "tg-fetch-ids.py not found beside this script - using a full-channel download"
-  log "Check #2 - downloading the whole channel back (slower; grows with the archive)"
-  log "  watching scratch, ceiling $(( rt_ceiling / GIB )) GiB"
-  full_channel_download || roundtrip_ok=0
+  (( ids_complete )) || err "some files reported no message id - a full-channel download is needed"
+  [[ -r "$FETCHER" ]] || err "tg-fetch-ids.py not found beside this script - a full-channel download is needed"
+  full_channel_or_refuse
 fi
 
 if (( roundtrip_ok )); then

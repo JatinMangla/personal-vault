@@ -456,6 +456,54 @@ transfer at ~12 MB/s. The files themselves stay safe in Telegram.
 A wrong line is as bad as a missing file — a bad hash means that file
 re-uploads. Keep the backup somewhere that is neither the phone nor the VM.
 
+### If the backup repository passes the free tier
+
+`/status` shows backup **failed**, and the journal says `repository at N MiB of
+10240 MiB free tier ... Refusing to grow it`. On 2026-09-17 the nightly job
+swept up ~69 GB of drain staging (fixed since: `tg-staging` and `*.insv` are
+excluded) and the repository reached **71 GB**. Oracle can delete every object
+in the tenancy if it is over the limit when the Free Trial ends, so shrink it.
+
+**Deploy the fixed `immich-backup.sh` first.** Otherwise the next 03:00 UTC
+run, now under the limit, backs staging up all over again.
+
+```bash
+# [VM] one helper for this shell session - restic with the backup's settings
+r() { sudo bash -c 'set -a; . /etc/personal-vault/ops.env; set +a
+  export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
+  export RESTIC_PASSWORD_FILE=/root/.restic-pass AWS_ACCESS_KEY_ID="$OCI_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$OCI_SECRET_KEY" AWS_DEFAULT_REGION="$OCI_REGION" RESTIC_CACHE_DIR=/var/lib/personal-vault/restic-cache
+  exec restic "$@"' restic "$@"; }
+
+r version                  # needs 0.15+ for rewrite (Ubuntu 24.04 ships 0.16)
+r unlock                   # clears only stale locks left by a killed run
+r rewrite --forget --exclude /mnt/media/tg-staging --exclude '*.insv'
+r prune                    # deletes the unreferenced footage - the slow part
+r stats --mode raw-data    # expect a few hundred MiB again
+```
+
+`rewrite --forget` keeps every snapshot and its database dumps; it removes
+only the footage from them. Then trigger a run to confirm, and check `/status`:
+
+```bash
+# [VM]
+sudo systemctl start immich-backup.service; journalctl -u immich-backup -n 5 --no-pager
+```
+
+### Keep Check #2's scratch out of Syncthing
+
+`/mnt/media/tg-staging` is the Syncthing folder (receive-only), and Check #2
+downloads into `tg-staging/.roundtrip`. Receive-only means those files are
+never *sent* to the phone, but Syncthing still scans and hashes every GB of
+them on the drain's disk. One line, once:
+
+```bash
+# [VM]
+echo '/.roundtrip' > /mnt/media/tg-staging/.stignore
+```
+
+This is not the "VM-side .stignore" that HARD-WON warns against: that one
+filtered files the phone sends. `.roundtrip` exists only on the VM.
+
 ### ⚠️ Protect the Telegram account — it holds the only copy of the footage
 
 The originals leave the card once archived, so the channel is the footage.
