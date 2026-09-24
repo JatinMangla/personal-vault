@@ -38,14 +38,27 @@ A personal media and document archive. Three components:
 - GitHub repo must be under a personal account, not an org (Vercel Hobby limit).
 
 ## Local development notes (this machine)
-- Windows 11. `npm` works from the PowerShell tool; it is broken under the
-  Bash tool (module resolution walks through `C:\Users\Administrator` and
-  raises EPERM). Run all npm/npx commands via PowerShell.
+- Windows 11. The `npm`/`npx` shims are broken (module resolution walks
+  through `C:\Users\Administrator` and raises EPERM). npm itself works from
+  Bash when the standalone copy is run through node directly:
+  `"/c/Program Files/nodejs/node.exe" "$LOCALAPPDATA/npm-standalone/node_modules/npm/bin/npm-cli.js" <args>`.
+  Project binaries (tsc, vitest, next, playwright) run the same way from
+  `vault/node_modules`. npx does not work; download CLI binaries instead.
 - Shell scripts under `ops/` and `infra/` target the Ubuntu 24.04 aarch64 VM,
   not this machine. They are authored here and executed there.
 - Keep LF line endings for everything under `ops/` and `infra/` — CRLF breaks
   shebangs on Linux. `.gitattributes` enforces this.
 
+## Speed first
+The owner's top priority: no change may slow uploads or any other feature.
+Tag every proposal Faster / Neutral / One-off, measure speed claims, and ship
+pipeline changes as opt-in flags that stay off until a real drain is faster.
+Ideas already rejected on speed grounds are listed in `docs/REVIEW-2026-09-24.md`.
+
 ## Build state
 See `docs/BUILD-STATE.md` for which phases (P0–P8) are complete and what the
 next action is. Update it at the end of any session that advances a phase.
+
+Reading order for a new session: this file → `docs/BUILD-STATE.md` →
+`docs/REVIEW-2026-09-24.md` (latest review, open items, deploy order) →
+`docs/HARD-WON.md` before touching the Telegram pipeline.

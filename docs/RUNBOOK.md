@@ -414,23 +414,40 @@ Use `--apply --keep` to move files to a `tg-archived/` sibling instead of
 deleting — for a batch you would rather hold on the card until you have
 restored something from it and seen the file open.
 
-### ⚠️ Back up the ledger — it is the only record of what is archived
+### The ledger — the only record of what is archived
+
+`uploaded.sha256` is the **sole source of truth** for what has already been
+archived. `tg-upload.sh` on the VM reads it on every batch, and the optional
+`tg-prune` on the phone reads it too; neither consults anything else.
+
+It lives at `/var/lib/insta360-archive/work/uploaded.sha256`. **Since
+2026-09-24 the nightly restic job backs it up** (with `manifest.sha256`) to
+Oracle Object Storage, encrypted, at idle I/O priority. Check it landed:
 
 ```bash
-# in Termux, periodically
+# [VM] short check - the nightly run logs what it included
+journalctl -t immich-backup --since yesterday | grep 'archive ledger'
+```
+
+To prove it is in the snapshot itself, not just that the job tried:
+
+```bash
+# [VM]
+sudo bash -c 'set -a; . /etc/personal-vault/ops.env; set +a
+  export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
+  export RESTIC_PASSWORD_FILE=/root/.restic-pass AWS_ACCESS_KEY_ID="$OCI_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$OCI_SECRET_KEY"
+  restic ls latest' | grep -E '(uploaded|manifest)\.sha256'
+```
+
+That copy shares the Oracle tenancy with the VM. A second copy off Oracle is
+still worth having; the manual one is:
+
+```bash
+# [PHONE] in Termux, occasionally
 scp -i ~/.ssh/immich_phone \
   ubuntu@100.88.183.74:/var/lib/insta360-archive/work/uploaded.sha256 \
   ~/ledger-backup.sha256
 ```
-
-`uploaded.sha256` is the **sole source of truth** for what has already been
-archived. `tg-upload.sh` on the VM reads it on every batch, and the optional
-`tg-prune` on the phone reads it too; neither consults anything else. Telegram
-is never asked, because `telegram-download` cannot list a channel without
-downloading all of it.
-
-It lives at `/var/lib/insta360-archive/work/uploaded.sha256` on one VM, and
-nothing else backs it up.
 
 **Losing it costs bandwidth, not footage.** Everything staged would be
 re-uploaded: duplicates in the channel, and on a 250 GB archive, days of
@@ -438,6 +455,25 @@ transfer at ~12 MB/s. The files themselves stay safe in Telegram.
 
 A wrong line is as bad as a missing file — a bad hash means that file
 re-uploads. Keep the backup somewhere that is neither the phone nor the VM.
+
+### ⚠️ Protect the Telegram account — it holds the only copy of the footage
+
+The originals leave the card once archived, so the channel is the footage.
+It is lost if the **account** is lost: a SIM-swap takeover, Telegram's
+inactivity self-destruct, or a ban. Three settings, all free, none of them
+touching the pipeline or its speed. In the Telegram app:
+
+- [ ] **Settings → Privacy and Security → Two-Step Verification → on.** A
+      cloud password stops a SIM-swap or a stolen login code from being enough.
+- [ ] **Settings → Privacy and Security → "If away for" (delete my account) →
+      the longest period offered.** The default can delete a quiet account,
+      and its channels, in months.
+- [ ] **Add a second account you control as an admin of the archive channel.**
+      A channel whose only admin is deleted cannot be administered again.
+
+Also note: the session file on the VM (`/var/lib/insta360-archive/tg.session`)
+is a full login to this personal account. Anyone with root on the VM can read
+every chat, not just the channel. Tailscale-only access is what protects it.
 
 ### Watching the drain from your phone
 

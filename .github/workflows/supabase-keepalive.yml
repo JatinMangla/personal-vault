@@ -10,10 +10,14 @@ name: supabase-keepalive
 
 on:
   schedule:
-    # Sundays 05:00 UTC (10:30 IST). Well inside the 7-day window even if one
-    # run is skipped: GitHub disables schedules on repos with no activity for
-    # 60 days, so the margin matters.
-    - cron: '0 5 * * 0'
+    # Every other day, 05:00 UTC (10:30 IST). This was weekly, which is NOT
+    # inside the 7-day pause window if one run is delayed or skipped - GitHub
+    # does both under load. Every two days survives two misses in a row.
+    #
+    # While the VM is up, the 1-minute metrics ingest keeps the project awake
+    # anyway; this is what keeps the vault alive if the VM is down. Note GitHub
+    # still disables schedules on a repo with no commits for 60 days.
+    - cron: '0 5 */2 * *'
   workflow_dispatch:
 
 permissions:

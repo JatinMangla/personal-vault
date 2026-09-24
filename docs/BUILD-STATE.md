@@ -1,23 +1,70 @@
 # Build state and next actions
 
-Last updated: **2026-09-14**
+Last updated: **2026-09-24**
 
 Everything buildable without cloud accounts is complete and verified. What
 remains requires provisioning, which needs your credentials.
 
 ---
 
+## 2026-09-24 — whole-project review, fixes on branch `review-hardening`
+
+An adversarial review found three promises the system did not keep: the recovery
+code had no screen that used it, the docs claimed a CSP that was not deployed,
+and the Insta360 ledger, the only record of what Telegram holds, had no
+automatic backup. All three are fixed, along with the other findings.
+**Constraint for every change: nothing may be slower.** Measured, not assumed:
+
+| Path (50 MB, local, no network) | Before | After |
+|---|---|---|
+| Upload: read + encrypt | 173 ms, peak +100 MB | 117 ms, peak +12 MB |
+| Download: decrypt + save | 213 ms, peak +166 MB | 194 ms, peak ≈0 MB |
+
+On a real network the gain is larger: the upload URL is now fetched *while* the
+file encrypts, and download decrypts each chunk as it arrives.
+
+| Change | Where |
+|---|---|
+| Envelope keys: recovery code works ("Forgot passphrase?"), passphrase can change; nothing re-encrypted | `lib/vault-keys.ts`, migration 0006 |
+| Streaming encrypt/decrypt, URL fetched during encryption | `lib/crypto.ts`, `lib/transfer.ts` |
+| Least privilege: no storage policies, column-scoped `user_keys` UPDATE, real-bytes quota | migrations 0005, 0006 |
+| Filename blind index removed (dictionary-attackable, unused) | migration 0007 |
+| CSP now matches the docs (`style-src 'self'` + `style-src-attr`) | `proxy.ts` |
+| Sign-out; list cleared on lock; sign-up UI removed | `app/page.tsx`, `login/page.tsx` |
+| Dead code removed: `sw.js` (never registered), 2 unused `@aws-sdk` packages | — |
+| Ledger in the nightly restic backup | `ops/backup/immich-backup.sh` |
+| Metrics payload JSON-safe, zero extra processes | `ops/metrics/collect-and-push.sh` |
+| New tests: API routes (24), key management (17), streaming (12), RLS (CI), payload (22) | — |
+
+### Deploy order (not yet done — needs your go-ahead)
+
+1. Apply **0005** and **0006** to the live project (either order).
+2. Deploy the vault code.
+3. Apply **0007** only after the new code is live; the old code writes `filename_hash`.
+4. Unlock once, which upgrades the account to the envelope in the background.
+   Then test "Forgot passphrase?" with the real recovery code.
+5. **Turn off sign-ups:** Supabase → Authentication → Sign In / Providers →
+   "Allow new users to sign up" → off. Verified 2026-09-24: `auth.users` = 1,
+   so nobody else has signed up yet.
+6. Telegram account hardening checklist: `docs/RUNBOOK.md`.
+7. Run `tg-probe-hashes.py` once, while no drain is active. If it matches and
+   is fast, Check #2 can skip most of its 12.5-minute download.
+
+---
+
 ## Verified in this repository
 
-These were run, not assumed:
+These were run, not assumed (2026-09-24):
 
 | Check | Result |
 |---|---|
-| Crypto test suite (`npm test`) | **46/46 passing** |
-| Responsive + hydration (`npm run test:e2e`) | **140/140** across 5 viewports, Chromium + WebKit |
+| Unit tests (`npm test`) | **115/115** (crypto, streaming, key management, API routes) |
+| Responsive + hydration + CSP (`npm run test:e2e`) | **142/142** across 5 viewports, Chromium + WebKit |
 | TypeScript (`npm run typecheck`) | zero errors |
 | Production build (`npm run build`) | succeeds; 5 API routes, 3 pages |
 | Client bundle scan (`npm run check:bundle`) | clean across 12 chunks |
+| Ops shell gates (shellcheck 0.9.0, `bash -n`, 5 fixture suites) | all pass |
+| RLS test against local Supabase | **CI only** (needs Docker); first run pending |
 | Secret-blocking hook | **14/14** — blocks 9 credential shapes, allows 5 legitimate patterns |
 | Shell scripts (`bash -n`) | all parse |
 | YAML (15 files) | all parse |
@@ -36,7 +83,7 @@ a real file was encrypted in the browser, uploaded, and downloaded back.
 | Filename in the database | **ciphertext** - unreadable even with admin access |
 | Object key | random, leaks nothing about the file |
 | Stored MIME type | `application/octet-stream` |
-| Blind index for duplicates | present |
+| Blind index for duplicates | present (removed 2026-09-24: dictionary-attackable, never read — migration 0007) |
 | **RLS cross-user isolation** | **a different user sees 0 rows** |
 
 That last line is the spec sign-off item "a second Supabase user cannot read the
@@ -487,7 +534,9 @@ collector, and gitleaks over the full history.
   The crypto core was untouched. See `vault/SECURITY-NOTES.md`.
 - **CSP tightened.** `style-src` is `'self'` with no `unsafe-inline`; only the
   narrow `style-src-attr` exception remains, for four genuinely dynamic values.
-  Rationale in `vault/SECURITY-NOTES.md`.
+  Rationale in `vault/SECURITY-NOTES.md`. **Correction (2026-09-24):** this was
+  written before it was true - `proxy.ts` still shipped `'unsafe-inline'`. It is
+  true now, and e2e tests enforce it.
 
 ## Deferred, deliberately (v2)
 
