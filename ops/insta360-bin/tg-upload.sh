@@ -535,8 +535,6 @@ fi
 rt_dir="$ROUNDTRIP_BASE/$$"
 mkdir -p "$rt_dir"
 
-roundtrip_ok=1
-
 # Abort Check #2 if the scratch directory outgrows what it could legitimately
 # need, and watch the volume while it runs.
 #
@@ -597,18 +595,17 @@ full_channel_fits() {
   (( archive_bytes + batch_bytes / 2 + margin_bytes < avail_kb * 1024 ))
 }
 
-# Fall back to the whole channel only when it can finish; otherwise fail this
-# Check #2 without deleting anything.
+# Fall back to the whole channel only when it can finish. Either way, every
+# file is then verified on its own below: one that did not arrive simply fails.
 full_channel_or_refuse() {
   if full_channel_fits; then
     log "Check #2 - downloading the whole channel back (slower; grows with the archive)"
     log "  watching scratch, ceiling $(( rt_ceiling / GIB )) GiB"
-    full_channel_download || roundtrip_ok=0
+    full_channel_download || err "whole-channel download did not finish - files that did not arrive fail verification below"
   else
     err "NOT falling back to a full-channel download: the channel (~$(( (archive_bytes + batch_bytes / 2) / GIB )) GiB)"
     err "  cannot fit in the free space on $(df -P "$rt_dir" | awk 'NR==2{print $6}') with the ${GUARD_MARGIN_GB} GiB margin"
     err "  staging is kept and nothing is deleted; the drain will retry this batch"
-    roundtrip_ok=0
   fi
 }
 
@@ -713,6 +710,15 @@ if [[ -n "${fetch_ids// /}" ]]; then
     # same few ids costs minutes; the whole-channel alternative costs the
     # archive's size. Each retry starts from an empty scratch directory so
     # nothing half-written is trusted.
+    #
+    # Retries use the PARALLEL fetcher when it is enabled: it carries on past a
+    # file that fails, so what is left in rt_dir afterwards says exactly WHICH
+    # files did not come back. The sequential one stops at the first failure,
+    # which would make every later file look failed too.
+    retry_fetcher="$FETCHER"
+    if [[ "${TG_PAR_FETCH:-0}" == "1" && -r "$PAR_FETCHER" ]]; then
+      retry_fetcher="$PAR_FETCHER"
+    fi
     for delay in ${TG_FETCH_RETRY_DELAYS:-120 300}; do
       (( fetched )) && break
       err "fetch by message id failed - retrying in ${delay}s"
@@ -720,17 +726,21 @@ if [[ -n "${fetch_ids// /}" ]]; then
       find "$rt_dir" -mindepth 1 -delete 2>/dev/null || true
       log "Check #2 - fetching ${#batch[@]} file(s) by message id (retry)"
       # shellcheck disable=SC2086
-      if ( cd "$rt_dir" && "$PIPX_PY" "$FETCHER" \
+      if ( cd "$rt_dir" && "$PIPX_PY" "$retry_fetcher" \
              --config "$TG_CONFIG" --channel "$TG_CHANNEL" --into "$rt_dir" \
              $fetch_ids >/dev/null ); then
         fetched=1
       fi
     done
 
+    # NO whole-channel fallback here. A message Telegram will not serve by id is
+    # not served inside a whole-channel download either: on 2026-09-24 that
+    # download stalled on the very same message, and 09-25 showed why (stored
+    # 1 MiB blocks Telegram never serves). So verify what DID come back; the
+    # files that did not are recorded below, and tg-archive.sh archives a file
+    # that keeps failing as verified parts instead.
     if (( ! fetched )); then
-      err "fetch by message id failed after retries"
-      find "$rt_dir" -mindepth 1 -delete 2>/dev/null || true
-      full_channel_or_refuse
+      err "fetch by message id failed after retries - verifying what came back"
     fi
   fi
 else
@@ -739,52 +749,72 @@ else
   full_channel_or_refuse
 fi
 
-if (( roundtrip_ok )); then
-  for f in "${batch[@]}"; do
-    base="$(basename "$f")"
+# Verify EVERY file, one by one. Each is judged on its own round trip, so one
+# file Telegram will not serve no longer sends its whole batch back to be
+# re-uploaded: the files that verified are recorded and cleared below, and
+# only the failures stay staged. The guarantee per file is unchanged - nothing
+# is recorded or deleted without its own byte-identical round trip.
+verified=()
+failed_names=()
+for f in "${batch[@]}"; do
+  base="$(basename "$f")"
 
-    shopt -s nullglob
-    parts=("$rt_dir/$base".[0-9][0-9]*)
-    shopt -u nullglob
+  shopt -s nullglob
+  parts=("$rt_dir/$base".[0-9][0-9]*)
+  shopt -u nullglob
 
-    joined="$rt_dir/$base"
-    if (( ${#parts[@]} > 0 )); then
-      write_phase rejoining "$base" 0 "${#batch[@]}"
-      mapfile -t sorted < <(
-        for p in "${parts[@]}"; do printf '%s\t%s\n' "${p##*.}" "$p"; done | sort -n -k1,1 | cut -f2
-      )
-      cat "${sorted[@]}" > "$joined"
-      log "  rejoined ${#sorted[@]} part(s) for $base"
-    fi
+  joined="$rt_dir/$base"
+  if (( ${#parts[@]} > 0 )); then
+    write_phase rejoining "$base" 0 "${#batch[@]}"
+    mapfile -t sorted < <(
+      for p in "${parts[@]}"; do printf '%s\t%s\n' "${p##*.}" "$p"; done | sort -n -k1,1 | cut -f2
+    )
+    cat "${sorted[@]}" > "$joined"
+    log "  rejoined ${#sorted[@]} part(s) for $base"
+  fi
 
-    if [[ ! -f "$joined" ]]; then
-      err "$base did not come back - nothing to verify"
-      roundtrip_ok=0
-      break
-    fi
+  if [[ ! -f "$joined" ]]; then
+    err "$base did not come back - nothing to verify"
+    failed_names+=("$base")
+    continue
+  fi
 
-    write_phase verifying "$base" 0 "${#batch[@]}"
-    expected="$(awk -v want="$base" '{ n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n); if (n == want) { print $1; exit } }' "$MANIFEST")"
-    actual="$(sha256sum "$joined" | cut -d' ' -f1)"
+  write_phase verifying "$base" 0 "${#batch[@]}"
+  expected="$(awk -v want="$base" '{ n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n); if (n == want) { print $1; exit } }' "$MANIFEST")"
+  actual="$(sha256sum "$joined" | cut -d' ' -f1)"
 
-    if [[ "$actual" != "$expected" ]]; then
-      err "ROUND-TRIP MISMATCH: $base"
-      err "  expected $expected"
-      err "  actual   $actual"
-      roundtrip_ok=0
-      break
-    fi
+  if [[ "$actual" != "$expected" ]]; then
+    err "ROUND-TRIP MISMATCH: $base"
+    err "  expected $expected"
+    err "  actual   $actual"
+    failed_names+=("$base")
+    continue
+  fi
 
-    log "  round trip verified: $base"
-  done
+  log "  round trip verified: $base"
+  verified+=("$f")
+done
+
+# Every failure is recorded, one line per failed attempt. tg-archive.sh counts
+# them: a file that fails Check #2 PARTS_AFTER times is archived as verified
+# parts by tg-upload-parts.sh instead of being re-uploaded whole, again, into
+# the same unservable blocks.
+if (( ${#failed_names[@]} )); then
+  printf '%s\n' "${failed_names[@]}" >> "$WORK_DIR/check2-failures" 2>/dev/null || true
 fi
 
-if (( ! roundtrip_ok )); then
+if (( ${#verified[@]} == 0 )); then
   err "Check #2 FAILED - staging NOT deleted, do NOT clear the card"
   exit 1
 fi
 
-log "Check #2 passed for all ${#batch[@]} file(s) - clearing staging"
+if (( ${#failed_names[@]} )); then
+  err "Check #2 failed for ${#failed_names[@]} file(s), which stay staged: ${failed_names[*]}"
+  log "recording and clearing the ${#verified[@]} file(s) that DID verify"
+fi
+batch=("${verified[@]}")
+
+log "Check #2 passed for ${#batch[@]} file(s) - clearing them from staging"
 write_phase clearing "" 0 "${#batch[@]}"
 
 # Record what is now in the archive, BEFORE deleting it.
@@ -861,6 +891,16 @@ for f in "${batch[@]}"; do
   rm -f "$f"
 done
 
-log "staging cleared"
+log "cleared ${#batch[@]} verified file(s) from staging"
+
+# A partial batch exits non-zero AFTER recording and clearing what verified, so
+# tg-archive.sh retries only the files still staged - and no success ping is
+# sent for a batch that did not fully land.
+if (( ${#failed_names[@]} )); then
+  err "PARTIAL: ${#batch[@]} verified and recorded; ${#failed_names[@]} still staged: ${failed_names[*]}"
+  log "SAFE TO CLEAR FROM THE CARD: only the files recorded in the ledger"
+  exit 1
+fi
+
 log "SAFE TO CLEAR THIS BATCH FROM THE CARD"
 hc ""

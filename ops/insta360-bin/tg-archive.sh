@@ -66,8 +66,60 @@ LOOP_LOCK="$WORK_DIR/.loop.lock"
 # appear. Two consecutive empty passes this far apart means no more is coming.
 IDLE_WAIT_SECONDS="${IDLE_WAIT_SECONDS:-300}"
 
+# Parts fallback (added 2026-09-25). Some files can never pass Check #2 as one
+# upload: Telegram stores a few 1 MiB blocks it then never serves, and an
+# identical re-upload lands on the same blocks (docs/REVIEW-2026-09-24.md).
+# tg-upload.sh records every Check #2 failure in CHECK2_FAILS; a staged file
+# that has failed PARTS_AFTER times is archived by tg-upload-parts.sh instead,
+# which reshapes the parts that fail. One that fails even that is moved to
+# HOLD_DIR - inside staging, so the unit may write there, and dot-prefixed, so
+# no *.insv glob sees it - and the drain carries on with everything else.
+PARTS_UPLOADER="${TG_PARTS_UPLOADER:-$HERE/tg-upload-parts.sh}"
+PARTS_AFTER="${PARTS_AFTER:-2}"
+CHECK2_FAILS="$WORK_DIR/check2-failures"
+HOLD_DIR="$STAGING_DIR/.hold"
+
 log() { echo "[$(date -Is)] $*"; }
 err() { echo "[$(date -Is)] ERROR: $*" >&2; }
+
+# Syncthing must not scan the VM's own scratch inside the staging folder:
+# Check #2 downloads, part scratch and held files are never sent to the phone
+# (the folder is receive-only) but would still be hashed, on the drain's disk.
+# Idempotent; appends only what is missing.
+ensure_stignore() {
+  local f="$STAGING_DIR/.stignore" p
+  for p in '/.roundtrip' '/.parts.*' '/.hold'; do
+    if ! grep -qxF -- "$p" "$f" 2>/dev/null; then
+      printf '%s\n' "$p" >> "$f" 2>/dev/null || true
+    fi
+  done
+}
+
+# Hand each staged file that keeps failing Check #2 to the parts uploader.
+# On success the file stays staged, and tg-upload.sh's next pass removes it as
+# already archived - by hash against the ledger, the normal path. On failure it
+# is held. Either way its failure count starts again.
+parts_fallback() {
+  local f name n
+  [[ -r "$CHECK2_FAILS" ]] || return 0
+  for f in "$@"; do
+    name="$(basename "$f")"
+    n="$(grep -cxF -- "$name" "$CHECK2_FAILS" 2>/dev/null || true)"
+    if (( ${n:-0} < PARTS_AFTER )); then
+      continue
+    fi
+    log "$name failed Check #2 $n time(s) - archiving it as verified parts"
+    if "$PARTS_UPLOADER" "$f"; then
+      log "$name archived as parts; the next pass clears it from staging"
+    else
+      err "$name failed as parts too - moving it to $HOLD_DIR so the drain continues"
+      err "  it is NOT archived: keep it on the card (see docs/REVIEW-2026-09-24.md)"
+      mkdir -p "$HOLD_DIR" && mv -- "$f" "$HOLD_DIR/"
+    fi
+    grep -vxF -- "$name" "$CHECK2_FAILS" > "$CHECK2_FAILS.tmp" 2>/dev/null || true
+    mv -f "$CHECK2_FAILS.tmp" "$CHECK2_FAILS"
+  done
+}
 
 # --- Syncthing-aware idle wait --------------------------------------------
 #
@@ -346,6 +398,7 @@ cmd_start() {
   log "draining - staging: $STAGING_DIR"
   log "stop with: systemctl stop tg-archive (safe at any point)"
   write_state running
+  ensure_stignore
 
   # A transient failure is worth retrying; an endless run of them is not. Ten
   # attempts at 60 s apart is ten minutes of patience, which covers a flood-wait
@@ -438,6 +491,11 @@ cmd_start() {
     # and retrying is safe. Stopping the whole drain because one batch hit a
     # flood-wait ceiling would mean babysitting it again, which is the thing
     # this script exists to avoid.
+    #
+    # First, any file that has already failed Check #2 PARTS_AFTER times goes
+    # to the parts uploader instead of being uploaded whole yet again.
+    parts_fallback "${batch[@]}"
+
     upload_rc=0
     "$UPLOADER" || upload_rc=$?
 
