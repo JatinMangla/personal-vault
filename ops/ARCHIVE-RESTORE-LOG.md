@@ -21,6 +21,41 @@ the other.
 
 ---
 
+## 2026-09-25 ~13:40 UTC — PASS (20 parts, fetched by ledger id)
+
+**The first file archived by `tg-upload-parts.sh`, restored end to end.**
+
+- File: `VID_20250221_145946_00_058.insv`, 1,321,912,620 bytes
+- Card fingerprint: `27fac9cba7098118213f355ec212b595b1b8def42e26fbb2bcb72028b6452289`
+- Ledger ids: `284 285 286 287 288 289 290 291 307 308 309 295 296 297 298 310 311 301 302 303`
+- Restored hash: **identical to the card fingerprint**
+- `tg-archive status` afterwards: 93 of 93 verified, remaining 0
+
+**Why this file needed parts.** Whole-file uploads of it never passed Check #2:
+Telegram stored every byte (`upload.getFileHashes` matched all 10,086 ranges)
+but never served three particular 1 MiB blocks, at any request size. Parts on
+1 MiB-aligned boundaries failed in exactly the three parts holding those blocks.
+Shifting those parts' starts by 4 KiB made them verify first time. Full account:
+`docs/REVIEW-2026-09-24.md`.
+
+**How it was restored — NOT with `restore.sh`.** The 20 recorded message ids
+were fetched with `tg-fetch-par.py` (4 at a time, about 2 minutes), then
+concatenated in part order and hashed:
+
+```bash
+set -a; . /etc/personal-vault/tg-archive.env; set +a
+PY=~/.local/share/pipx/venvs/telegram-upload/bin/python; CFG=/var/lib/insta360-archive/telegram-upload.json
+mkdir /tmp/r58 && $PY /opt/insta360-archive/bin/tg-fetch-par.py --config $CFG --channel "$TG_CHANNEL" --into /tmp/r58 \
+  $(awk '$2=="VID_20250221_145946_00_058.insv"{for(i=4;i<=NF;i++)print $i}' /var/lib/insta360-archive/work/uploaded.sha256)
+cat $(ls /tmp/r58/VID_20250221_145946_00_058.insv.* | sort) | sha256sum
+```
+
+`restore.sh` still downloads the **whole channel**, and would have stalled on
+the broken copies (messages 244, 246, 248 and the failed part uploads) until
+they are deleted. Restore by ledger id is the open fix.
+
+---
+
 ## 2026-09-15T13:17:58+00:00 — PASS (split file, 2 parts)
 
 **The last untested path in the system.** Every previous batch was a single
