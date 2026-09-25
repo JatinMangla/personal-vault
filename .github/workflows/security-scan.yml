@@ -178,6 +178,17 @@ jobs:
         # pulling a 162 GB channel onto 111 GB free after one Telegram timeout.
         run: bash ops/insta360-bin/test-channel-fallback.sh
 
+      - name: Parts-uploader fixtures
+        # tg-upload-parts.sh writes a ledger row, and the ledger is what lets
+        # tg-prune delete an original from the card. These pin that a row is
+        # written only when every part round-trips, that a failed part is
+        # redone alone, and that a mismatched file uploads nothing.
+        run: bash ops/insta360-bin/test-upload-parts.sh
+
+      - name: Delete-guard fixtures
+        # tg-delete-ids.py must never delete a message the ledger points at.
+        run: python3 ops/insta360-bin/test-delete-ids.py
+
       - name: Python scripts compile
         # Several ops scripts (the probes) have no fixtures and are authored on a
         # machine without Python. Byte-compiling catches a syntax error here
