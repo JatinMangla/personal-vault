@@ -24,8 +24,10 @@ T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/channel" "$T/work" "$T/media"
 echo 100 > "$T/next_id"
-: > "$T/fail_ids"          # message ids whose fetch fails (a dead block)
+: > "$T/fail_ids"          # message ids whose fetch fails (a transient failure)
 : > "$T/corrupt_names"     # part names that always come back altered
+: > "$T/bad_hashes"        # CONTENT that is never served back, whatever the id -
+                           # what Telegram actually did on 2026-09-25
 
 # --- stubs ---------------------------------------------------------------------
 
@@ -49,15 +51,21 @@ case "\$mode" in
       id=\$(ls "$T/channel" | awk -F'__' -v n="\$n" '\$2 == n { print \$1 }' | sort -n | tail -1)
       if [[ -n "\$id" ]]; then printf '%s\t%s\n' "\$n" "\$id"; fi
     done ;;
-  fetch)
+  fetchpar)
+    # Like tg-fetch-par.py: fetch every id, skip the ones that fail, and exit
+    # non-zero at the end if any did. A failed file is simply absent.
+    rc=0
     for id in "\$@"; do
-      if grep -qx "\$id" "$T/fail_ids"; then exit 1; fi
       src=\$(ls "$T/channel"/"\$id"__* 2>/dev/null | head -1)
-      if [[ -z "\$src" ]]; then exit 1; fi
+      if [[ -z "\$src" ]] || grep -qx "\$id" "$T/fail_ids" \
+         || grep -qx "\$(sha256sum "\$src" | cut -d' ' -f1)" "$T/bad_hashes"; then
+        rc=1; continue
+      fi
       name=\${src##*__}
       cp "\$src" "\$into/\$name"
       if grep -qx "\$name" "$T/corrupt_names"; then printf 'X' >> "\$into/\$name"; fi
-    done ;;
+    done
+    exit \$rc ;;
 esac
 EOF
 chmod +x "$T/bin/telegram-upload" "$T/bin/py"
@@ -78,13 +86,22 @@ EOF
 run() {
   : > "$T/uploads"
   TG_ENV_FILE="$T/env" PIPX_PY="$T/bin/py" TG_RESOLVER="$T/resolve" \
-    TG_FETCHER="$T/fetch" TG_UPLOAD_CMD="$T/bin/telegram-upload" \
+    TG_PAR_FETCHER="$T/fetchpar" TG_UPLOAD_CMD="$T/bin/telegram-upload" \
     PART_MIB=1 MAX_ROUNDS="${ROUNDS:-4}" bash "$TOOL" "$FILE" > "$T/out" 2>&1
 }
 
 reset() {
   rm -f "$T/channel"/* "$T/work/uploaded.sha256"
-  echo 100 > "$T/next_id"; : > "$T/fail_ids"; : > "$T/corrupt_names"
+  echo 100 > "$T/next_id"; : > "$T/fail_ids"; : > "$T/corrupt_names"; : > "$T/bad_hashes"
+}
+
+# Rejoin the channel messages the ledger row points at, in order, and hash
+# them: the end-to-end proof that the row describes a restorable file.
+rejoin_from_ledger() {
+  local id
+  for id in $(awk '{ for (i = 4; i <= NF; i++) print $i }' "$T/work/uploaded.sha256"); do
+    cat "$T/channel/${id}__"*
+  done | sha256sum | cut -d' ' -f1
 }
 
 pass=0; fail=0
@@ -104,6 +121,20 @@ ck "one ledger row, ids in part order" "$(cat "$T/work/uploaded.sha256")" "$HASH
 ck "four uploads, one per part" "$(wc -l < "$T/uploads")" "4"
 ck "original untouched" "$(sha256sum "$FILE" | cut -d' ' -f1)" "$HASH"
 ck "part scratch removed" "$(ls -A "$T/media")" "VID_test.insv"
+ck "ledger ids rejoin to the original" "$(rejoin_from_ledger)" "$HASH"
+
+echo "a part whose CONTENT is never served (2026-09-25's failure)"
+reset
+# The bytes of aligned part .02 (2 MiB..3 MiB) fail whatever message holds them.
+dd if="$FILE" bs=1M skip=2 count=1 status=none | sha256sum | cut -d' ' -f1 > "$T/bad_hashes"
+rc=0; ROUNDS=5 run || rc=$?
+ck "exits 0" "$rc" "0"
+ck "part .02 was reshaped" "$(grep -c 'reshaped VID_test.insv.02' "$T/out")" "1"
+ck "reshaped part now starts 4 KiB later" "$(grep -c 'now starts at byte 2101248' "$T/out")" "1"
+ck "row: .00 and .03 kept, .01 and .02 redone" \
+   "$(cut -d' ' -f4- "$T/work/uploaded.sha256")" "100 105 106 103"
+ck "ledger ids rejoin to the original" "$(rejoin_from_ledger)" "$HASH"
+ck "both failed copies listed for deletion" "$(grep -c 'channel): 102 104$' "$T/out")" "1"
 
 echo "one part fails its round trip once"
 reset; echo 102 > "$T/fail_ids"; rc=0; run || rc=$?
