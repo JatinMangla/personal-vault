@@ -21,6 +21,27 @@ the other.
 
 ---
 
+## 2026-09-25T18:11:18+00:00 — PASS (restore.sh by ledger id, first real run)
+
+**The rewritten `restore.sh` — fetch by ledger id instead of the whole channel —
+run against the real archive, deliberately WHILE the nightly scrub held the
+Telegram session**, to prove the two share it.
+
+- Command: `restore.sh --into /tmp/rt VID_20250221_145946_00_058.insv`
+- Fetched 20 parts by message id, 4 at a time: 1260 MiB in **76 s (~16.6 MB/s)**,
+  about 26× the old whole-channel rate (0.64 MB/s)
+- Rejoined and verified against the manifest: **byte-identical to the card**
+- The scrub (started 20 s earlier) had checked 125 blocks at ~0.16 s each,
+  saw the restore queue for the session in `/proc/locks`, saved its place
+  (`target 0 of 119, block 125`) and exited cleanly. The restore got the
+  session immediately.
+
+The same restore had failed minutes earlier with `database is locked`, before
+the scrub learned to step aside for anything queued on the session (branch
+`fix/session-sharing`).
+
+---
+
 ## 2026-09-25 ~13:40 UTC — PASS (20 parts, fetched by ledger id)
 
 **The first file archived by `tg-upload-parts.sh`, restored end to end.**
