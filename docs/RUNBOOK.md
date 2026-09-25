@@ -98,22 +98,36 @@ Keep both if the systemd unit is ever rewritten:
 
 ## Restoring from the archive
 
-`restore.sh` pulls `.insv` files back out of the channel. Written 2026-09-14;
-**it has still never been run against the real archive.** Until it has, the
-recovery half of this system is tested only against fixtures.
+`restore.sh` pulls `.insv` files back out of the channel. Real restores have
+passed (`ops/ARCHIVE-RESTORE-LOG.md`).
+
+**Since 2026-09-25 it restores BY LEDGER ID** whenever the ledger
+(`uploaded.sha256`) is available: it fetches only each file's recorded
+messages, 4 at a time (~14× the old whole-channel rate), in groups of about
+20 GB that are verified and cleared before the next, so scratch space stays
+small. Every file is checked against the **card hash in the ledger**, so no
+separate manifest is needed. `--list` and `--dry-run` read the ledger and need
+no network. Without a ledger, or with `--whole-channel`, it downloads the
+entire channel as before.
 
 ```bash
-restore.sh --list                                  # what is in the channel
-restore.sh --into ~/recovered --dry-run            # what would come back
-restore.sh --into ~/recovered --manifest ~/card.sha256
-restore.sh --into ~/recovered VID_001.insv         # just one file
+restore.sh --list                                          # what is archived
+restore.sh --into ~/recovered --dry-run                    # what would come back
+restore.sh --into ~/recovered                              # everything (VM: ledger found automatically)
+restore.sh --into ~/recovered --ledger ~/uploaded.sha256   # on another machine
+restore.sh --into ~/recovered VID_001.insv                 # just one file
 ```
 
+**Where the ledger is when the VM is gone:** the nightly restic backup holds
+it (`restic ls latest | grep uploaded.sha256`, see "The ledger" below), and so
+does any copy you scp'd to the phone.
+
 **It runs on any machine with Python** — that is the point, because a real
-restore happens when the VM is gone. It needs `telegram-download`, the
-`telegram-upload` config JSON, and the channel id via `--channel` or
-`TG_CHANNEL`. It does not need the VM's env file, `/mnt/media`, Syncthing,
-Immich or systemd.
+restore happens when the VM is gone. It needs `telegram-upload` installed with
+pipx (which brings Telethon and `telegram-download`), the `telegram-upload`
+config JSON, the channel id via `--channel` or `TG_CHANNEL`, and ideally the
+ledger. It does not need the VM's env file, `/mnt/media`, Syncthing, Immich or
+systemd.
 
 It will never delete anything, never overwrite an existing file, and never
 report success for a file it could not verify.
@@ -122,8 +136,8 @@ report success for a file it could not verify.
 
 | Result | Meaning |
 |---|---|
-| `PASS` | Every restored file matched the manifest byte for byte. |
-| `RESTORED (UNVERIFIED)` | Files came back, but some or all were not checked against a manifest. Not a pass. |
+| `PASS` | Every restored file matched its card hash (ledger or manifest) byte for byte. |
+| `RESTORED (UNVERIFIED)` | Files came back, but some or all were not checked against a card hash. Not a pass. |
 | `NOTHING DONE` | Everything was skipped because it already existed. Nothing was verified. **Not a pass.** |
 | `FAIL` | A restored file did not match its manifest hash. The file is left in place for inspection. |
 
@@ -503,6 +517,73 @@ echo '/.roundtrip' > /mnt/media/tg-staging/.stignore
 
 This is not the "VM-side .stignore" that HARD-WON warns against: that one
 filtered files the phone sends. `.roundtrip` exists only on the VM.
+
+Since 2026-09-25 `tg-archive` maintains this itself at the start of every
+drain, adding `/.roundtrip`, `/.parts.*` and `/.hold` when missing.
+
+### When a file will not pass Check #2: the automatic parts fallback
+
+Telegram occasionally stores a few 1 MiB blocks of an upload that it then
+never serves back, and an identical re-upload lands on the same blocks
+(`docs/REVIEW-2026-09-24.md`). Since 2026-09-25 the drain handles it itself:
+
+1. Check #2 judges **each file on its own**. Files that verify are recorded and
+   cleared; a file that fails stays staged and is logged in
+   `$WORK_DIR/check2-failures`.
+2. After a file has failed **twice**, `tg-archive` hands it to
+   `tg-upload-parts.sh`. That uploads 64 MiB parts, verifies each by
+   download, shifts any part that keeps failing by 4 KiB, and records the file
+   only when every part verified. The next pass clears it from staging as usual.
+3. If even that fails, the file moves to `tg-staging/.hold/`, **is not
+   archived, and stays on the card** (`tg-prune` never deletes an unrecorded
+   file). The drain carries on with everything else. Watch for it:
+
+```bash
+# [VM]
+ls -la /mnt/media/tg-staging/.hold/ 2>/dev/null; journalctl -u tg-archive | grep -E "parts|hold" | tail
+```
+
+Failed upload attempts leave dead copies in the channel. List them from the
+journal (`did NOT verify ... safe to delete`) and remove them with
+`tg-delete-ids.py`, which refuses any id the ledger uses.
+
+### The archive scrub: is every stored block still readable?
+
+`tg-scrub.py` runs nightly (`tg-scrub.timer`, 21:30 UTC). For 30 minutes it
+probes one request per 1 MiB block of the messages the ledger points at,
+resuming where it stopped, so the whole archive is re-checked about every two
+weeks. It **reads only**, never slows a drain (it skips when one runs, and
+steps aside within a second when one starts), and reports to `/status` as
+"Archive scrub".
+
+```bash
+# [VM] install once, after rsyncing ops/ to /opt:
+sudo cp /opt/personal-vault/ops/systemd/tg-scrub.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now tg-scrub.timer
+# run one now (30 min), and see what it found:
+sudo systemctl start --no-block tg-scrub.service
+journalctl -u tg-scrub -n 20 --no-pager
+cat /var/lib/insta360-archive/work/scrub-state.json
+```
+
+**If it reports unreadable blocks,** the files are named in
+`scrub-state.json` (`bad[]`): their ledger rows point at copies that can no
+longer be restored in full. Simply re-staging the file does NOT help, because
+the drain sees the name in the ledger and discards it as already archived. With
+the original in hand (on the card, copied to the VM), re-archive it deliberately:
+
+```bash
+# [VM] drain stopped; N = the file's name, F = the original's path
+L=/var/lib/insta360-archive/work/uploaded.sha256; B=$L.bak-$(date +%Y%m%d%H%M%S)
+cp -p "$L" "$B"                                   # keep the old row, in case
+awk -v n="$N" '$2 != n' "$B" > "$L"               # drop just that file's row
+/opt/insta360-archive/bin/tg-upload-parts.sh "$F" # re-archive as verified parts
+# then delete the old, damaged message ids (listed in the backup's row) with
+# tg-delete-ids.py - they are no longer in the ledger, so it will allow it
+```
+
+Once the card is wiped, an unreadable block cannot be fixed from this side;
+that is why the scrub runs while the originals may still exist.
 
 ### ⚠️ Protect the Telegram account — it holds the only copy of the footage
 

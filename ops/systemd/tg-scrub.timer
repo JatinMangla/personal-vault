@@ -1,0 +1,15 @@
+# Nightly scrub at 21:30 UTC (03:00 IST), away from the 03:00 UTC restic
+# backup. 30 minutes a night covers the whole archive in roughly two weeks at
+# one probe per 1 MiB block (~0.15 s each). Skipped if a drain is running.
+
+[Unit]
+Description=Run the Telegram archive scrub nightly
+
+[Timer]
+OnCalendar=*-*-* 21:30:00
+RandomizedDelaySec=600
+Persistent=false
+Unit=tg-scrub.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,47 @@
+# Read-only scrub of the Telegram archive: probe every stored 1 MiB block for
+# ones Telegram will no longer serve. Time-boxed, resumable, and it never
+# competes with a drain. See ops/insta360-bin/tg-scrub.py.
+#
+# NEVER SLOWS A DRAIN:
+#   - flock -n on the Telegram session: if a drain (or any upload) holds it,
+#     this run is skipped (exit 75, treated as success)
+#   - tg-scrub.py watches tg-archive's loop lock and exits within a second of a
+#     drain starting; tg-upload.sh waits up to 30 s for the session, so the
+#     drain loses about a second, not a 60 s retry
+#
+# Exit 1 = at least one bad block is known: deliberately left as a FAILURE so
+# `systemctl --failed` shows it, alongside the count on /status.
+
+[Unit]
+Description=Read-only scrub of the Telegram archive (time-boxed, yields to drains)
+Documentation=file:///opt/personal-vault/docs/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+EnvironmentFile=/etc/personal-vault/tg-archive.env
+ExecStart=/usr/bin/flock -n -E 75 /var/lib/insta360-archive/work/.session.lock \
+  /home/ubuntu/.local/share/pipx/venvs/telegram-upload/bin/python \
+  /opt/insta360-archive/bin/tg-scrub.py \
+  --config /var/lib/insta360-archive/telegram-upload.json \
+  --channel ${TG_CHANNEL} --minutes 30
+SuccessExitStatus=3 75
+TimeoutStartSec=45min
+
+Nice=15
+IOSchedulingClass=idle
+CPUWeight=10
+MemoryMax=512M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/insta360-archive
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true

@@ -87,7 +87,10 @@ mkdir -p "$WORK_DIR"
 # honest reporting that matters, and it lets the script be tested anywhere.
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$WORK_DIR/.session.lock"
-  if ! flock -n 9; then
+  # Wait briefly rather than fail at once. The nightly scrub (tg-scrub.py)
+  # holds this session but steps aside within about a second once a drain
+  # starts; failing immediately would cost the drain a 60 s retry instead.
+  if ! flock -w "${SESSION_LOCK_WAIT:-30}" 9; then
     err "another run holds the session lock"
     exit 1
   fi
