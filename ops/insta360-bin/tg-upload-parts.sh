@@ -87,7 +87,10 @@ mkdir -p "$WORK_DIR"
 # (Ubuntu ships it), and say so plainly where it does not.
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$WORK_DIR/.session.lock"
-  flock -n 9 || die "a drain holds the Telegram session - stop it first (systemctl stop tg-archive)"
+  # Wait briefly: the nightly scrub holds the session but steps aside within
+  # about a second once something queues for it. A drain does not step aside.
+  flock -w "${SESSION_LOCK_WAIT:-30}" 9 \
+    || die "the Telegram session is busy (a drain?) - stop it first (systemctl stop tg-archive)"
 else
   err "flock unavailable - running without the session lock"
 fi

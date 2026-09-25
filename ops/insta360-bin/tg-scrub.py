@@ -3,7 +3,7 @@
 will no longer serve, before a restore needs them.
 
     tg-scrub.py --config <json> --channel <id> [--ledger FILE] [--state FILE]
-                [--minutes 30] [--request-kib 4] [--loop-lock FILE]
+                [--minutes 30] [--request-kib 512] [--loop-lock FILE] [--session-lock FILE]
 
 WHY THIS EXISTS. On 2026-09-24/25 a file passed upload but could not be
 downloaded: Telegram had stored three 1 MiB blocks it then refused to serve,
@@ -22,22 +22,25 @@ at the start of every run, so one that recovers clears the next night. Each run
 is time-boxed and resumes where the last stopped, so the whole archive is
 covered over about two weeks of nights without any single run being long.
 
-IT NEVER SLOWS A DRAIN. It needs the Telegram session, which admits one process
-at a time, so the systemd unit only starts it when no drain holds the lock, and
-between requests it checks tg-archive's loop lock: the moment a drain starts,
-it saves its place and exits.
+IT NEVER SLOWS ANYTHING ELSE. It needs the Telegram session, which admits one
+process at a time, so the systemd unit only starts it when the session is free.
+Between requests it checks /proc/locks (read-only): the moment a drain runs, or
+ANY tool queues for the session - a restore, an upload, tg-upload-parts.sh - it
+saves its place and exits, and that tool gets the session within about a second.
+A `systemctl stop` does the same.
 
-READ-ONLY: it downloads a few KiB per block into memory and discards them, and
+READ-ONLY: it downloads one request per block into memory and discards it, and
 writes only its own state file. Report fields (for the metrics collector):
     updated, last_full_pass, position, blocks_checked, bad[]
 Exit codes: 0 no bad block known, 1 at least one bad block known, 2 bad
-invocation or Telethon unavailable, 3 yielded to a drain before doing anything.
+invocation or Telethon unavailable, 3 stepped aside before doing anything.
 """
 
 import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
 import time
 
@@ -109,23 +112,50 @@ def lock_holder_listed(proc_locks_text, dev_ino):
     return False
 
 
+def lock_waiter_listed(proc_locks_text, dev_ino):
+    """True if something is QUEUED waiting for the lock on dev_ino.
+
+    The scrub holds the Telegram session lock; a restore, an upload or the
+    parts tool that wants it shows up here as a "->" line. Seeing one means:
+    step aside now.
+    """
+    for line in proc_locks_text.splitlines():
+        fields = line.split()
+        if "->" in fields and dev_ino in fields:
+            return True
+    return False
+
+
 # --- I/O ---------------------------------------------------------------------
 
-def drain_running(loop_lock):
-    """True if tg-archive holds its loop lock (a drain is in progress).
+def _dev_ino(path):
+    st = os.stat(path)
+    return "{:02x}:{:02x}:{}".format(os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
 
-    READ-ONLY by design: it looks the lock up in /proc/locks instead of trying
-    to take it. Taking it even for an instant could make a drain that starts in
-    that instant see the lock busy and skip its run.
+
+def someone_needs_telegram(loop_lock, session_lock):
+    """True if a drain is running, or anything is waiting for the session.
+
+    READ-ONLY by design: both are looked up in /proc/locks, never taken. Taking
+    the loop lock even for an instant could make a drain that starts in that
+    instant see it busy and skip its run.
     """
     try:
-        st = os.stat(loop_lock)
         with open("/proc/locks") as fh:
             text = fh.read()
     except OSError:
         return False
-    dev_ino = "{:02x}:{:02x}:{}".format(os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
-    return lock_holder_listed(text, dev_ino)
+    try:
+        if lock_holder_listed(text, _dev_ino(loop_lock)):
+            return True
+    except OSError:
+        pass
+    try:
+        if lock_waiter_listed(text, _dev_ino(session_lock)):
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def load_state(path):
@@ -169,14 +199,26 @@ async def probe(client, msg, offset, request, timeout):
 async def run(args, cfg):
     from telethon import TelegramClient
 
+    # Step aside when a drain runs, when ANY tool is waiting for the Telegram
+    # session (a restore, an upload, the parts tool), or when systemd stops the
+    # unit - in every case by saving the position and exiting normally, so a
+    # `systemctl stop tg-scrub` loses nothing.
+    stop = {"now": False}
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda: stop.__setitem__("now", True))
+
+    def must_yield():
+        return stop["now"] or someone_needs_telegram(args.loop_lock, args.session_lock)
+
     with open(args.ledger) as fh:
         tlist = targets(parse_ledger(fh.read()))
     state = load_state(args.state)
     if not tlist:
         print("ledger lists no message ids - nothing to scrub")
         return 0
-    if drain_running(args.loop_lock):
-        print("a drain is running - not scrubbing now")
+    if must_yield():
+        print("a drain or another Telegram tool needs the session - not scrubbing now")
         return 3
 
     session = cfg["session"][:-len(".session")] if cfg["session"].endswith(".session") \
@@ -211,7 +253,7 @@ async def run(args, cfg):
         # Re-check what is already known bad, first: a block Telegram serves
         # again should clear from /status the next night, not weeks later.
         for b in list(state["bad"]):
-            if drain_running(args.loop_lock):
+            if must_yield():
                 yielded = True
                 break
             if b["offset"] < 0:
@@ -235,7 +277,7 @@ async def run(args, cfg):
             for off in offsets:
                 if time.monotonic() >= deadline:
                     break
-                if drain_running(args.loop_lock):
+                if must_yield():
                     yielded = True
                     break
                 ok = await served(msg, off)
@@ -261,7 +303,7 @@ async def run(args, cfg):
     state["updated"] = now
     save_state(args.state, state)
 
-    print(f"checked {checked} block(s); {'yielded to a drain; ' if yielded else ''}"
+    print(f"checked {checked} block(s); {'stepped aside; ' if yielded else ''}"
           f"{len(state['bad'])} bad block(s) known; next: target {ti} of "
           f"{len(tlist)}, block {bi}")
     return 1 if state["bad"] else 0
@@ -274,6 +316,7 @@ def main():
     ap.add_argument("--ledger", default="/var/lib/insta360-archive/work/uploaded.sha256")
     ap.add_argument("--state", default="/var/lib/insta360-archive/work/scrub-state.json")
     ap.add_argument("--loop-lock", default="/var/lib/insta360-archive/work/.loop.lock")
+    ap.add_argument("--session-lock", default="/var/lib/insta360-archive/work/.session.lock")
     ap.add_argument("--minutes", type=float, default=30)
     ap.add_argument("--request-kib", type=int, default=512)
     ap.add_argument("--timeout", type=int, default=30)

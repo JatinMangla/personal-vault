@@ -147,6 +147,21 @@ need_telegram() {
   [[ -n "$TG_CHANNEL" ]] || { err "no channel: pass --channel or set TG_CHANNEL"; exit 2; }
   [[ -n "$TG_CONFIG"  ]] || { err "no config: pass --config or set TG_CONFIG"; exit 2; }
   [[ -r "$TG_CONFIG"  ]] || { err "config not readable: $TG_CONFIG"; exit 2; }
+
+  # On the VM the Telegram session is shared, and admits one process at a time
+  # ("database is locked" otherwise - hit on 2026-09-25 while the scrub ran).
+  # Queue for it like every other tool: the nightly scrub sees the queue in
+  # /proc/locks and steps aside within about a second. Elsewhere there is no
+  # lock file and nothing to wait for.
+  local lk="${WORK_DIR:-/var/lib/insta360-archive/work}/.session.lock"
+  if [[ -e "$lk" ]] && command -v flock >/dev/null 2>&1; then
+    exec 9>"$lk"
+    if ! flock -w "${SESSION_LOCK_WAIT:-60}" 9; then
+      err "the Telegram session is busy - a drain or an upload is running"
+      note "try again when it finishes: tg-archive status"
+      exit 1
+    fi
+  fi
 }
 
 if (( ! LIST_ONLY )); then
