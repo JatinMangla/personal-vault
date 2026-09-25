@@ -6,7 +6,7 @@
 # writes to the archive; this is the only thing that reads from it. An archive
 # nobody has restored from is a hypothesis, not a backup.
 #
-#   restore.sh --list                        what is in the channel
+#   restore.sh --list                        what is in the archive
 #   restore.sh --dry-run --into ~/recovered  what would be restored
 #   restore.sh --into ~/recovered            restore everything
 #   restore.sh --into ~/recovered VID_001.insv VID_002.insv
@@ -15,23 +15,43 @@
 # The point of a restore is that the VM is gone. So this does not require
 # /etc/personal-vault/tg-archive.env, does not assume /mnt/media exists, and
 # does not need Syncthing, Immich or systemd. It needs Python with
-# telegram-download, a telegram-upload config JSON, and the channel id.
+# telegram-upload (which brings Telethon), a telegram-upload config JSON, the
+# channel id - and, ideally, the LEDGER.
+#
+# TWO WAYS TO FETCH, chosen automatically:
+#
+#   BY LEDGER ID (default when uploaded.sha256 is available). The ledger records
+#   every archived file's card hash, size and message id(s). Only those
+#   messages are fetched, 4 at a time with tg-fetch-par.py, in groups of about
+#   RESTORE_GROUP_GB so scratch space stays bounded. --list and --dry-run need
+#   no network at all. Every file is verified against the card hash in the
+#   ledger, so no separate manifest is needed. Rows from before ids were
+#   recorded are looked up by name with tg-resolve-ids.py.
+#
+#   WHOLE CHANNEL (no ledger, or --whole-channel). telegram-download pulls the
+#   entire chat and files are picked out locally. It works with nothing but a
+#   config and a channel id, but it downloads everything, sequentially, into
+#   scratch - and a single message Telegram refuses to serve stalls it.
+#
+#   Where the ledger lives: /var/lib/insta360-archive/work/uploaded.sha256 on
+#   the VM; a copy in the nightly restic backup (since 2026-09-24); and any
+#   copy you scp'd off (docs/RUNBOOK.md). Pass it with --ledger.
 #
 # WHAT IT WILL NOT DO
 #   - delete anything, ever
 #   - overwrite an existing file (it refuses and moves on)
 #   - report success for a file it could not verify
 #
-# ON VERIFICATION. The manifest is what makes a restore trustworthy: it is the
-# sha256 of every file as it was ON THE CARD, before anything moved. If you
-# have it, every restored file is checked against it. If you do not, the files
-# still come back but the result is reported as UNVERIFIED - a deliberately
-# distinct word, the same way ops/RESTORE-LOG.md says PASS (DB-ONLY) rather
-# than PASS. A partial result must never be mistakable for a full one.
+# ON VERIFICATION. A restore is trustworthy only against the sha256 each file
+# had ON THE CARD, before anything moved. The ledger carries it (column 1);
+# so does the manifest, which wins if both are given. With neither, files still
+# come back but the result is reported as UNVERIFIED - a deliberately distinct
+# word, the same way ops/RESTORE-LOG.md says PASS (DB-ONLY) rather than PASS. A
+# partial result must never be mistakable for a full one.
 #
 # A copy of the manifest is uploaded to the channel by tg-upload.sh after each
 # batch, named manifest-<timestamp>.sha256, so it is usually recoverable from
-# the archive itself. --list will show them.
+# the archive itself.
 
 set -euo pipefail
 
@@ -50,9 +70,11 @@ fi
 
 DEST=""
 MANIFEST_ARG=""
+LEDGER_ARG=""
 DRY_RUN=0
 LIST_ONLY=0
 KEEP_PARTS=0
+WHOLE_CHANNEL=0
 declare -a WANTED=()
 
 log()  { echo "[$(date -Is)] $*"; }
@@ -64,20 +86,23 @@ usage() {
 restore.sh - pull .insv files back out of the Telegram archive
 
   --into DIR          where to write recovered files (required unless --list)
-  --manifest FILE     sha256 manifest to verify against (strongly recommended)
+  --ledger FILE       uploaded.sha256: fetch by message id and verify against it
+                      (default: the VM's ledger, if present)
+  --manifest FILE     sha256 manifest to verify against (wins over the ledger)
+  --whole-channel     ignore the ledger and download the entire channel
   --channel ID        Telegram channel (default: $TG_CHANNEL)
   --config FILE       telegram-upload config JSON (default: $TG_CONFIG)
-  --list              show what is in the channel, restore nothing
+  --list              show what is in the archive, restore nothing
   --dry-run           show what would be restored, write nothing
   --keep-parts        keep the raw split parts after rejoining them
   -h, --help          this
 
-  Any remaining arguments are filenames to restore. With none, everything
-  found in the channel is restored.
+  Any remaining arguments are filenames to restore. With none, everything is
+  restored.
 
 Examples
   restore.sh --list
-  restore.sh --into ~/recovered --manifest ~/card.sha256
+  restore.sh --into ~/recovered --ledger ~/uploaded.sha256
   restore.sh --into ~/recovered VID_20260914_001.insv
 USAGE
 }
@@ -86,6 +111,8 @@ while (( $# )); do
   case "$1" in
     --into)     DEST="${2:?--into needs a directory}"; shift 2 ;;
     --manifest) MANIFEST_ARG="${2:?--manifest needs a file}"; shift 2 ;;
+    --ledger)   LEDGER_ARG="${2:?--ledger needs a file}"; shift 2 ;;
+    --whole-channel) WHOLE_CHANNEL=1; shift ;;
     --channel)  TG_CHANNEL="${2:?--channel needs an id}"; shift 2 ;;
     --config)   TG_CONFIG="${2:?--config needs a file}"; shift 2 ;;
     --list)     LIST_ONLY=1; shift ;;
@@ -100,29 +127,31 @@ done
 TG_CHANNEL="${TG_CHANNEL:-}"
 TG_CONFIG="${TG_CONFIG:-}"
 MANIFEST="${MANIFEST_ARG:-${MANIFEST:-}}"
+LEDGER="${LEDGER_ARG:-${TG_LEDGER:-${WORK_DIR:-/var/lib/insta360-archive/work}/uploaded.sha256}}"
+GROUP_BYTES="${RESTORE_GROUP_BYTES:-$(( ${RESTORE_GROUP_GB:-20} * 1024 * 1024 * 1024 ))}"
 
-[[ -n "$TG_CHANNEL" ]] || { err "no channel: pass --channel or set TG_CHANNEL"; exit 2; }
-[[ -n "$TG_CONFIG"  ]] || { err "no config: pass --config or set TG_CONFIG"; exit 2; }
-[[ -r "$TG_CONFIG"  ]] || { err "config not readable: $TG_CONFIG"; exit 2; }
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PIPX_PY="${PIPX_PY:-$HOME/.local/share/pipx/venvs/telegram-upload/bin/python}"
+[[ -x "$PIPX_PY" ]] || PIPX_PY="$(command -v python3 || echo python3)"
+PAR_FETCHER="${TG_PAR_FETCHER:-$HERE/tg-fetch-par.py}"
+RESOLVER="${TG_RESOLVER:-$HERE/tg-resolve-ids.py}"
 
-command -v telegram-download >/dev/null || {
-  err "telegram-download not found"
-  note "install with: pipx install telegram-upload"
-  note "on Python 3.12 see docs/RUNBOOK.md - distutils was removed and the"
-  note "package needs a patch. NEVER run 'pipx upgrade telegram-upload'."
-  exit 2
+MODE=channel
+if (( ! WHOLE_CHANNEL )) && [[ -r "$LEDGER" ]]; then
+  MODE=ledger
+elif [[ -n "$LEDGER_ARG" ]] && (( ! WHOLE_CHANNEL )); then
+  err "ledger not readable: $LEDGER_ARG"; exit 2
+fi
+
+need_telegram() {
+  [[ -n "$TG_CHANNEL" ]] || { err "no channel: pass --channel or set TG_CHANNEL"; exit 2; }
+  [[ -n "$TG_CONFIG"  ]] || { err "no config: pass --config or set TG_CONFIG"; exit 2; }
+  [[ -r "$TG_CONFIG"  ]] || { err "config not readable: $TG_CONFIG"; exit 2; }
 }
 
 if (( ! LIST_ONLY )); then
   [[ -n "$DEST" ]] || { err "no destination: pass --into DIR"; exit 2; }
 fi
-
-# --- fetch -----------------------------------------------------------------
-#
-# telegram-download has no filename filter - it takes the whole chat. That is
-# the same limitation that makes tg-upload.sh's Check #2 expensive, and it is
-# why filtering happens locally, after the fetch. For a restore this is a fair
-# trade: it happens once, and completeness matters more than bandwidth.
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/restore.XXXXXX")"
 cleanup() {
@@ -134,44 +163,70 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "fetching from channel $TG_CHANNEL"
-log "this pulls the whole channel; it can take a long time"
+declare -A BASES=() LEDGER_IDS=() LEDGER_HASH=() LEDGER_SIZE=()
 
-if ! ( cd "$WORK" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep ); then
-  err "download failed - nothing was written to the destination"
-  exit 1
-fi
-
-shopt -s nullglob
-downloaded=("$WORK"/*)
-shopt -u nullglob
-
-if (( ${#downloaded[@]} == 0 )); then
-  err "the channel returned no files"
-  note "check the channel id, and that this account can read it"
-  exit 1
-fi
-
-log "fetched ${#downloaded[@]} object(s)"
-
-# --- rejoin split parts ----------------------------------------------------
-#
-# telegram-upload splits large files into NAME.00, NAME.01, ... Rejoining in
-# numeric order is the same logic Check #2 uses; lexical order would corrupt
-# anything with more than ten parts (.10 sorting before .2).
-
-declare -A BASES=()
-for f in "${downloaded[@]}"; do
-  b="$(basename "$f")"
-  if [[ "$b" =~ ^(.+)\.[0-9]{2,}$ ]]; then
-    BASES["${BASH_REMATCH[1]}"]=1
-  else
-    BASES["$b"]=1
+if [[ "$MODE" == ledger ]]; then
+  # --- what is archived: read from the ledger, no network --------------------
+  #
+  # Columns: card sha256, name, size, then message id(s) - "-" or absent when
+  # unknown (rows from before 2026-09-16). A name that appears twice keeps its
+  # LAST row, the most recent record of it.
+  log "archive contents from the ledger: $LEDGER"
+  while read -r l_hash l_name l_size l_rest; do
+    [[ -n "${l_name:-}" ]] || continue
+    BASES["$l_name"]=1
+    LEDGER_HASH["$l_name"]="$l_hash"
+    LEDGER_SIZE["$l_name"]="${l_size:-0}"
+    l_ids=""
+    for tok in ${l_rest:-}; do
+      if [[ "$tok" =~ ^[0-9]+$ ]]; then l_ids+=" $tok"; fi
+    done
+    LEDGER_IDS["$l_name"]="${l_ids# }"
+  done < "$LEDGER"
+  (( ${#BASES[@]} )) || { err "the ledger lists no files: $LEDGER"; exit 1; }
+else
+  # --- fetch: the whole channel ----------------------------------------------
+  #
+  # telegram-download has no filename filter - it takes the whole chat, so
+  # filtering happens locally, after the fetch. Used only without a ledger.
+  need_telegram
+  command -v telegram-download >/dev/null || {
+    err "telegram-download not found"
+    note "install with: pipx install telegram-upload"
+    note "on Python 3.12 see docs/RUNBOOK.md - distutils was removed and the"
+    note "package needs a patch. NEVER run 'pipx upgrade telegram-upload'."
+    exit 2
+  }
+  log "fetching from channel $TG_CHANNEL"
+  log "no ledger - this pulls the WHOLE channel; it can take a long time"
+  if ! ( cd "$WORK" && telegram-download --from "$TG_CHANNEL" --config "$TG_CONFIG" -m keep ); then
+    err "download failed - nothing was written to the destination"
+    exit 1
   fi
-done
+
+  shopt -s nullglob
+  downloaded=("$WORK"/*)
+  shopt -u nullglob
+  if (( ${#downloaded[@]} == 0 )); then
+    err "the channel returned no files"
+    note "check the channel id, and that this account can read it"
+    exit 1
+  fi
+  log "fetched ${#downloaded[@]} object(s)"
+
+  # telegram-upload splits large files into NAME.00, NAME.01, ...
+  for f in "${downloaded[@]}"; do
+    b="$(basename "$f")"
+    if [[ "$b" =~ ^(.+)\.[0-9]{2,}$ ]]; then
+      BASES["${BASH_REMATCH[1]}"]=1
+    else
+      BASES["$b"]=1
+    fi
+  done
+fi
 
 if (( LIST_ONLY )); then
-  log "in the channel:"
+  log "in the archive ($MODE):"
   for b in "${!BASES[@]}"; do printf '  %s\n' "$b"; done | sort
   exit 0
 fi
@@ -183,10 +238,10 @@ if (( ${#WANTED[@]} )); then
     if [[ -n "${BASES[$w]:-}" ]]; then
       TARGETS+=("$w")
     else
-      err "not in the channel: $w"
+      err "not in the archive: $w"
     fi
   done
-  (( ${#TARGETS[@]} )) || { err "none of the requested files are in the channel"; exit 1; }
+  (( ${#TARGETS[@]} )) || { err "none of the requested files are in the archive"; exit 1; }
 else
   # Exclude the manifest copies tg-upload.sh posts after each batch. They are
   # archive metadata, not card content: no manifest lists itself, so they can
@@ -197,14 +252,14 @@ else
     printf '%s\n' "${!BASES[@]}" | grep -v '^manifest-.*\.sha256$' | sort
   )
   if (( ${#TARGETS[@]} == 0 )); then
-    err "the channel holds only manifest copies - no .insv files to restore"
+    err "the archive holds only manifest copies - no .insv files to restore"
     note "name one explicitly to recover it: restore.sh --into DIR manifest-....sha256"
     exit 1
   fi
 fi
 
 if (( DRY_RUN )); then
-  log "dry run - would restore ${#TARGETS[@]} file(s) into $DEST:"
+  log "dry run - would restore ${#TARGETS[@]} file(s) into $DEST ($MODE):"
   for t in "${TARGETS[@]}"; do printf '  %s\n' "$t"; done
   exit 0
 fi
@@ -223,22 +278,39 @@ have_manifest=0
 if [[ -n "$MANIFEST" && -r "$MANIFEST" ]]; then
   have_manifest=1
   log "verifying against $(basename "$MANIFEST")"
+elif [[ "$MODE" == ledger ]]; then
+  log "verifying against the card hashes in the ledger"
 else
   err "NO MANIFEST - files will be restored but NOT verified"
-  note "pass --manifest, or recover one from the channel (--list shows them)"
+  note "pass --ledger or --manifest, or recover a manifest from the channel"
 fi
 
-for base in "${TARGETS[@]}"; do
-  out="$DEST/$base"
+# The card hash for one file: the manifest wins, then the ledger, else empty.
+expected_hash() {
+  local base="$1" h=""
+  if (( have_manifest )); then
+    h="$(awk -v want="$base" '
+      { n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n)
+        if (n == want) { print $1; exit } }' "$MANIFEST")"
+  fi
+  if [[ -z "$h" && "$MODE" == ledger ]]; then h="${LEDGER_HASH[$base]:-}"; fi
+  printf '%s' "$h"
+}
+
+# Rejoin (or copy) one file out of $WORK into $DEST, then verify it.
+restore_one() {
+  local base="$1" out="$DEST/$1" parts sorted expected actual
 
   # Never clobber. A restore that silently overwrites a file someone already
   # recovered is worse than one that stops and says so.
   if [[ -e "$out" ]]; then
     err "exists already, skipping: $out"
     skipped=$(( skipped + 1 ))
-    continue
+    return
   fi
 
+  # Rejoining in numeric order is the same logic Check #2 uses; lexical order
+  # would corrupt anything with more than ten parts (.10 sorting before .2).
   shopt -s nullglob
   parts=("$WORK/$base".[0-9][0-9]*)
   shopt -u nullglob
@@ -253,49 +325,100 @@ for base in "${TARGETS[@]}"; do
   elif [[ -f "$WORK/$base" ]]; then
     cp "$WORK/$base" "$out"
   else
-    err "$base: neither a whole file nor any parts were found"
+    err "$base: neither a whole file nor any parts were fetched"
     failed=$(( failed + 1 ))
-    continue
+    return
   fi
 
   restored=$(( restored + 1 ))
 
-  if (( have_manifest )); then
-    expected="$(awk -v want="$base" '
-      { n = $NF; sub(/^\*/, "", n); sub(/.*\//, "", n)
-        if (n == want) { print $1; exit } }' "$MANIFEST")"
-
-    if [[ -z "$expected" ]]; then
+  expected="$(expected_hash "$base")"
+  if [[ -z "$expected" ]]; then
+    if (( have_manifest )); then
       err "$base: not listed in the manifest - cannot verify"
-      unverified=$(( unverified + 1 ))
-      continue
+    fi
+    unverified=$(( unverified + 1 ))
+    return
+  fi
+
+  actual="$(sha256sum "$out" | cut -d' ' -f1)"
+  if [[ "$actual" == "$expected" ]]; then
+    log "  verified: $base"
+    verified=$(( verified + 1 ))
+  else
+    err "HASH MISMATCH: $base"
+    err "  expected $expected"
+    err "  actual   $actual"
+    err "  the restored file is at $out - inspect it, do not trust it"
+    failed=$(( failed + 1 ))
+  fi
+}
+
+if [[ "$MODE" == channel ]]; then
+  for base in "${TARGETS[@]}"; do restore_one "$base"; done
+else
+  need_telegram
+
+  # Rows with no recorded ids: ask Telegram by name, newest copy of each part.
+  declare -a NO_IDS=()
+  for t in "${TARGETS[@]}"; do
+    if [[ -z "${LEDGER_IDS[$t]}" ]]; then NO_IDS+=("$t"); fi
+  done
+  if (( ${#NO_IDS[@]} )); then
+    log "looking up ${#NO_IDS[@]} file(s) the ledger has no message id for"
+    while IFS=$'\t' read -r rname rids; do
+      if [[ -n "$rname" && -n "$rids" ]]; then LEDGER_IDS["$rname"]="$rids"; fi
+    done < <("$PIPX_PY" "$RESOLVER" --config "$TG_CONFIG" --channel "$TG_CHANNEL" \
+               --limit 100000 "${NO_IDS[@]}" || true)
+  fi
+
+  # Groups of about GROUP_BYTES: fetched in parallel, restored, then cleared,
+  # so scratch never holds more than one group however large the archive.
+  total=${#TARGETS[@]}
+  i=0
+  while (( i < total )); do
+    group=()
+    ids=()
+    bytes=0
+    while (( i < total )); do
+      t="${TARGETS[$i]}"
+      sz="${LEDGER_SIZE[$t]:-0}"
+      if (( ${#group[@]} > 0 && bytes + sz > GROUP_BYTES )); then break; fi
+      group+=("$t")
+      bytes=$(( bytes + sz ))
+      for id in ${LEDGER_IDS[$t]}; do ids+=("$id"); done
+      i=$(( i + 1 ))
+    done
+
+    if (( ${#ids[@]} )); then
+      log "fetching ${#group[@]} file(s), $(( bytes / 1048576 )) MiB, by message id ($i of $total)"
+      "$PIPX_PY" "$PAR_FETCHER" --config "$TG_CONFIG" --channel "$TG_CHANNEL" \
+        --into "$WORK" "${ids[@]}" \
+        || err "some messages could not be fetched - those files are reported below"
     fi
 
-    actual="$(sha256sum "$out" | cut -d' ' -f1)"
-    if [[ "$actual" == "$expected" ]]; then
-      log "  verified: $base"
-      verified=$(( verified + 1 ))
-    else
-      err "HASH MISMATCH: $base"
-      err "  expected $expected"
-      err "  actual   $actual"
-      err "  the restored file is at $out - inspect it, do not trust it"
-      failed=$(( failed + 1 ))
-    fi
-  else
-    unverified=$(( unverified + 1 ))
-  fi
-done
+    for t in "${group[@]}"; do
+      if [[ -z "${LEDGER_IDS[$t]}" ]]; then
+        err "$t: no message found in the channel"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      restore_one "$t"
+    done
+
+    if (( ! KEEP_PARTS )); then find "$WORK" -mindepth 1 -delete; fi
+  done
+fi
 
 # --- result ----------------------------------------------------------------
 
 echo
 log "restored to: $DEST"
 log "  files written : $restored"
-(( verified ))   && log "  verified      : $verified"
-(( unverified )) && log "  UNVERIFIED    : $unverified"
-(( skipped ))    && log "  skipped       : $skipped (already existed)"
-(( failed ))     && err "  FAILED        : $failed"
+if (( verified ));   then log "  verified      : $verified"; fi
+if (( unverified )); then log "  UNVERIFIED    : $unverified"; fi
+if (( skipped ));    then log "  skipped       : $skipped (already existed)"; fi
+if (( failed ));     then err "  FAILED        : $failed"; fi
 
 if (( failed )); then
   err "RESULT: FAIL - $failed file(s) did not restore intact"
@@ -322,11 +445,11 @@ if (( restored == 0 )); then
   exit 0
 fi
 
-if (( ! have_manifest )) || (( unverified )); then
+if (( unverified )); then
   log "RESULT: RESTORED (UNVERIFIED)"
-  log "  $verified file(s) verified, $unverified NOT checked against a manifest."
-  log "  A partial result, deliberately not called a pass. Recover a manifest"
-  log "  and re-run to turn this into a real one."
+  log "  $verified file(s) verified, $unverified NOT checked against a card hash."
+  log "  A partial result, deliberately not called a pass. Pass --ledger or"
+  log "  --manifest and re-run to turn this into a real one."
   exit 0
 fi
 

@@ -295,6 +295,22 @@ if [[ -r "$DRAIN_STATE" ]]; then
   done < "$DRAIN_STATE"
 fi
 
+# Archive scrub (tg-scrub.py): how many stored blocks Telegram will not serve,
+# when it last ran, and when it last covered the whole archive. Zeros until it
+# has run, or if jq is missing - "not run" must never read as "all clear", so
+# the dashboard keys "not run yet" off SCRUB_UPDATED being 0.
+SCRUB_STATE="${INSTA360_WORK_DIR:-/var/lib/insta360-archive/work}/scrub-state.json"
+SCRUB_BAD=0
+SCRUB_UPDATED=0
+SCRUB_FULL_PASS=0
+SCRUB_CHECKED=0
+if [[ -r "$SCRUB_STATE" ]] && command -v jq >/dev/null 2>&1; then
+  read -r SCRUB_BAD SCRUB_UPDATED SCRUB_FULL_PASS SCRUB_CHECKED < <(
+    jq -r '[(.bad | length), (.updated // 0), (.last_full_pass // 0), (.blocks_checked // 0)]
+           | map(tostring) | join(" ")' "$SCRUB_STATE" 2>/dev/null || echo "0 0 0 0"
+  ) || true
+fi
+
 # The filename comes from the camera rather than from us; json_str_vars() in the
 # payload below escapes it, so it is reported exactly rather than stripped.
 [[ "$DRAIN_PHASE_INDEX" =~ ^[0-9]+$ ]] || DRAIN_PHASE_INDEX=0
@@ -415,6 +431,7 @@ json_num_vars BLOCK_TOTAL BLOCK_USED BLOCK_AVAIL BOOT_TOTAL BOOT_USED BOOT_AVAIL
   SYNC_NEED_BYTES SYNC_NEED_FILES SYNC_GLOBAL_FILES SYNC_LOCAL_FILES \
   DRAIN_PHASE_INDEX DRAIN_PHASE_TOTAL DRAIN_TOTAL DRAIN_DONE DRAIN_REMAINING \
   DRAIN_BYTES DRAIN_BYTES_UNKNOWN DRAIN_UPDATED \
+  SCRUB_BAD SCRUB_UPDATED SCRUB_FULL_PASS SCRUB_CHECKED \
   PHOTO_COUNT VIDEO_COUNT USAGE_PHOTOS USAGE_VIDEOS IMMICH_USAGE FAILED_JOBS \
   LAST_BACKUP_TS SNAPSHOT_COUNT REPO_BYTES LAST_DRILL_TS \
   MEM_TOTAL MEM_USED MEM_AVAIL SWAP_TOTAL SWAP_USED LOAD1 LOAD5 LOAD15 UPTIME_SECONDS
@@ -462,7 +479,11 @@ read -r -d '' PAYLOAD <<JSON || true
     "remaining": ${DRAIN_REMAINING},
     "bytes": ${DRAIN_BYTES},
     "bytes_unknown": ${DRAIN_BYTES_UNKNOWN},
-    "updated": ${DRAIN_UPDATED}
+    "updated": ${DRAIN_UPDATED},
+    "scrub_bad": ${SCRUB_BAD},
+    "scrub_updated": ${SCRUB_UPDATED},
+    "scrub_full_pass": ${SCRUB_FULL_PASS},
+    "scrub_checked": ${SCRUB_CHECKED}
   },
   "immich": {
     "photo_count": ${PHOTO_COUNT},

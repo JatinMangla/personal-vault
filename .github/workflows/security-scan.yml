@@ -185,6 +185,28 @@ jobs:
         # redone alone, and that a mismatched file uploads nothing.
         run: bash ops/insta360-bin/test-upload-parts.sh
 
+      - name: Check #2 end-to-end fixtures
+        # Runs the shipped tg-upload.sh against a stubbed channel: a file is
+        # recorded and cleared only on its own byte-identical round trip, and
+        # failures stay staged and are logged for the parts fallback.
+        run: bash ops/insta360-bin/test-upload-check2.sh
+
+      - name: Parts-fallback fixtures
+        # When the drain hands a repeatedly failing file to the parts uploader,
+        # and what happens if even that fails.
+        run: bash ops/insta360-bin/test-parts-fallback.sh
+
+      - name: Restore fixtures
+        # restore.sh is the only thing that reads the archive back. These pin
+        # fetch-by-ledger-id, verification against the ledger's card hashes,
+        # FAIL on corruption, bounded groups, and the whole-channel fallback.
+        run: bash ops/insta360-bin/test-restore.sh
+
+      - name: Scrub fixtures
+        # What tg-scrub.py probes, how it tracks bad blocks, and that it spots
+        # a running drain from /proc/locks without ever taking the lock.
+        run: python3 ops/insta360-bin/test-scrub.py
+
       - name: Delete-guard fixtures
         # tg-delete-ids.py must never delete a message the ledger points at.
         run: python3 ops/insta360-bin/test-delete-ids.py

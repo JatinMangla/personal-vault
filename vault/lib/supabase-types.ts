@@ -124,6 +124,15 @@ export interface MetricsPayload {
     bytes?: number;
     /** Archived files whose size was never recorded. 0 once the old rows age out. */
     bytes_unknown?: number;
+    /**
+     * Read-only archive scrub (tg-scrub.py), from 2026-09-25: stored 1 MiB
+     * blocks Telegram will not serve back. `scrub_updated` 0 means the scrub
+     * has never run - which must not be shown as "all clear".
+     */
+    scrub_bad?: number;
+    scrub_updated?: number;
+    scrub_full_pass?: number;
+    scrub_checked?: number;
   };
   immich: {
     photo_count: number;

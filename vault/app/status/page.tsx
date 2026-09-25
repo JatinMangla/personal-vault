@@ -493,6 +493,39 @@ export default function StatusPage() {
               value={formatRelative(payload.archive.updated * 1000)}
             />
           )}
+          {/* Read-only scrub: can every stored block still be downloaded?
+              "Not run yet" is shown as such, never as a clean result. */}
+          <StatRow
+            label="Archive scrub"
+            value={
+              !payload.archive.scrub_updated
+                ? 'not run yet'
+                : (payload.archive.scrub_bad ?? 0) > 0
+                  ? `${payload.archive.scrub_bad} unreadable block(s)`
+                  : `all readable · ${formatRelative(payload.archive.scrub_updated * 1000)}`
+            }
+            state={
+              !payload.archive.scrub_updated
+                ? 'amber'
+                : (payload.archive.scrub_bad ?? 0) > 0
+                  ? 'red'
+                  : 'green'
+            }
+          />
+          {(payload.archive.scrub_full_pass ?? 0) > 0 && (
+            <StatRow
+              label="Last full scrub"
+              value={formatRelative((payload.archive.scrub_full_pass ?? 0) * 1000)}
+            />
+          )}
+          {(payload.archive.scrub_bad ?? 0) > 0 && (
+            <div className="banner banner-red" role="alert">
+              Telegram will not serve {payload.archive.scrub_bad} stored block(s). The
+              affected files are listed in <code>scrub-state.json</code> on the VM.
+              Re-archive them while the originals still exist: RUNBOOK, &ldquo;The
+              archive scrub&rdquo;.
+            </div>
+          )}
           {(payload.archive.bytes_unknown ?? 0) > 0 && (
             <p className="faint">
               {payload.archive.bytes_unknown} file(s) were archived before sizes
@@ -501,8 +534,8 @@ export default function StatusPage() {
           )}
           {payload.archive.phase === 'downloading' && (
             <p className="faint">
-              Check #2 downloads the whole channel back to verify this batch, so
-              this step takes longer as the archive grows.
+              Check #2 downloads this batch back by message id and compares every
+              byte with the card before anything is cleared.
             </p>
           )}
           {payload.archive.status === 'incomplete' && (
