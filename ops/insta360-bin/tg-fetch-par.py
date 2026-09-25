@@ -55,8 +55,10 @@ returning something plausible:
     the glob is NAME.[0-9][0-9]* and its trailing * matches ".part" too
   - bytes written are asserted equal to the size Telegram reports for that
     message; a mismatch fails the run and names the file
-  - a FloodWaitError aborts immediately and exits non-zero, which makes
-    tg-upload.sh fall back to the proven sequential path
+  - a SHORT FloodWaitError (<= 30 s) is logged and waited out, and that file
+    restarts from byte 0 - up to 3 times. A longer one aborts and exits
+    non-zero, which makes tg-upload.sh fall back to the proven sequential
+    path. Nothing sleeps without a log line
   - free space is checked before anything is fetched, because tg-upload.sh's
     disk watchdog guards only the full-channel download, not this path
   - concurrency defaults to 4, not FastTelethon's 20, and is capped at 8. The
@@ -93,6 +95,24 @@ def log(msg):
     print(msg, file=sys.stderr)
 
 
+# A SHORT flood wait is retried, LOUDLY; a long one still aborts.
+#
+# Aborting on every flood wait was deliberate - a silent sleep once hid a slow
+# fetch for 162 minutes - but it made FLOOD_WAIT_1 on one part of a 20-part
+# restore (2026-09-25) fail the whole run, and in Check #2 it would push the
+# batch onto the 0.64 MB/s sequential path: minutes lost to a one-second pause.
+# Waiting a few seconds, with a log line saying so, keeps the "never silent"
+# rule and loses nothing. Anything longer still aborts, exactly as before.
+FLOOD_RETRY_MAX_SECONDS = int(os.environ.get("TG_FLOOD_RETRY_MAX", "30"))
+FLOOD_RETRIES = 3
+
+
+def flood_should_retry(seconds, attempt):
+    """True if a FLOOD_WAIT of `seconds` on retry number `attempt` (0-based)
+    should be waited out and retried, rather than abort the run."""
+    return 0 <= seconds <= FLOOD_RETRY_MAX_SECONDS and attempt < FLOOD_RETRIES
+
+
 async def fetch_one(client, msg, into, sem, results):
     """Stream ONE message to disk. Sequential within the file, by design."""
     from telethon.errors import FloodWaitError
@@ -113,22 +133,33 @@ async def fetch_one(client, msg, into, sem, results):
     tmp = os.path.join(into, "." + name + ".part")
 
     async with sem:
-        written = 0
-        try:
-            # Append in yield order. No seek, no offset arithmetic: chunks
-            # arrive in sequence for this file and are written in sequence.
-            with open(tmp, "wb") as fh:
-                async for chunk in client.iter_download(msg):
-                    fh.write(chunk)
-                    written += len(chunk)
-        except FloodWaitError as e:
-            results[msg.id] = ("flood", "FLOOD_WAIT_{}".format(e.seconds))
-            _unlink(tmp)
-            return
-        except Exception as e:
-            results[msg.id] = ("error", "{}: {}".format(type(e).__name__, e))
-            _unlink(tmp)
-            return
+        attempt = 0
+        while True:
+            written = 0
+            try:
+                # Append in yield order. No seek, no offset arithmetic: chunks
+                # arrive in sequence for this file and are written in sequence.
+                # A retry reopens with "wb", so it always starts from byte 0.
+                with open(tmp, "wb") as fh:
+                    async for chunk in client.iter_download(msg):
+                        fh.write(chunk)
+                        written += len(chunk)
+                break
+            except FloodWaitError as e:
+                _unlink(tmp)
+                if flood_should_retry(e.seconds, attempt):
+                    attempt += 1
+                    log("FLOOD_WAIT_{} on {} - waiting {}s, then retrying it from "
+                        "the start (retry {}/{})".format(
+                            e.seconds, name, e.seconds + 1, attempt, FLOOD_RETRIES))
+                    await asyncio.sleep(e.seconds + 1)
+                    continue
+                results[msg.id] = ("flood", "FLOOD_WAIT_{}".format(e.seconds))
+                return
+            except Exception as e:
+                results[msg.id] = ("error", "{}: {}".format(type(e).__name__, e))
+                _unlink(tmp)
+                return
 
         # THE assertion. A short download reaching the rejoin would be hashed,
         # mismatch, and fail Check #2 - safe, but it wastes the whole batch and

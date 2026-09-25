@@ -155,6 +155,30 @@ check("less free than needed refuses", space_ok(1000, 900), False)
 check("zero expected bytes proceeds", space_ok(0, 0), True)
 
 
+# --- flood-wait retry policy, IMPORTED from the shipped script ---------------
+#
+# FLOOD_WAIT_1 on one part failed a whole 20-part restore on 2026-09-25. The
+# rule: short waits are retried (loudly), long ones still abort, and retries
+# are bounded so a throttle can never become an endless loop.
+import importlib.util  # noqa: E402
+import os  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location(
+    "tgpar", os.path.join(os.path.dirname(os.path.realpath(__file__)), "tg-fetch-par.py"))
+tgpar = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(tgpar)
+retry = tgpar.flood_should_retry
+
+print("flood-wait retry policy (shipped code):")
+check("FLOOD_WAIT_1 is retried", retry(1, 0), True)
+check("a 30 s wait is retried", retry(30, 0), True)
+check("a 31 s wait aborts", retry(31, 0), False)
+check("an hour aborts", retry(3600, 0), False)
+check("the 3rd retry is still allowed", retry(1, 2), True)
+check("a 4th retry is refused", retry(1, 3), False)
+check("a negative wait is not trusted", retry(-1, 0), False)
+
+
 print()
 print("passed={} failed={}".format(PASS, FAIL))
 sys.exit(1 if FAIL else 0)
