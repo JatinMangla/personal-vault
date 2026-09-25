@@ -48,14 +48,14 @@ def fail(msg, code=2):
     sys.exit(code)
 
 
-async def sample(client, msg, offset, timeout):
+async def sample(client, msg, offset, timeout, request=REQUEST):
     """Fetch one request at `offset`. Returns (ok, seconds, detail)."""
     started = time.monotonic()
     try:
         async def one():
             got = 0
             async for chunk in client.iter_download(
-                msg, offset=offset, limit=1, request_size=REQUEST
+                msg, offset=offset, limit=1, request_size=request
             ):
                 got += len(chunk)
             return got
@@ -111,6 +111,35 @@ async def run(args, cfg):
             fail(f"message {args.id} is not one of those listed", 2)
         size = int(msg.document.size)
 
+        # --- Part 3 (--at): does a SMALLER request get through a bad spot? ----
+        # For each named MiB, fetch every request of each size across that one
+        # MiB. If small requests succeed where 512 KiB fails, the failure is
+        # the request shape, and a fetcher can fall back to small requests.
+        if args.at:
+            sizes = [int(k) * 1024 for k in args.request_kib.split(",")]
+            print(f"\n== message {msg.id}: request sizes "
+                  f"{', '.join(f'{s // 1024} KiB' for s in sizes)} across each MiB listed")
+            for mib in args.at:
+                for req in sizes:
+                    base = mib * MIB
+                    results = []
+                    # A failed request costs ~14 s; at 4 KiB a MiB is 256 of
+                    # them. Stop a sweep after 3 failures - that already
+                    # answers the question - rather than run for hours.
+                    for off in range(base, min(base + MIB, size), req):
+                        ok, secs, _ = await sample(client, msg, off, args.timeout, req)
+                        results.append((off, ok))
+                        if sum(not r for _, r in results) >= 3:
+                            break
+                    good = sum(ok for _, ok in results)
+                    bad_at = [f"+{(o - base) // 1024}K" for o, ok in results if not ok]
+                    total = len(range(base, min(base + MIB, size), req))
+                    stopped = " (stopped early)" if len(results) < total else ""
+                    print(f"  {mib:>6} MiB  {req // 1024:>4} KiB requests: "
+                          f"{good}/{len(results)} ok{stopped}"
+                          + (f"  failed at {', '.join(bad_at)}" if bad_at else ""))
+            return 0
+
         # --- Part 2: map good and bad regions ---------------------------------
         step = args.step * MIB
         offsets = list(range(0, size, step))
@@ -149,7 +178,15 @@ def main():
     ap.add_argument("--id", type=int, help="which copy to sample (default: newest)")
     ap.add_argument("--step", type=int, default=64, help="MiB between samples")
     ap.add_argument("--timeout", type=int, default=45, help="seconds per sample")
+    ap.add_argument("--at", type=lambda s: [int(x) for x in s.split(",")],
+                    help="MiB offsets to test with each --request-kib size, "
+                         "e.g. 626,676,1040 (skips the full-file map)")
+    ap.add_argument("--request-kib", default="512,128,32,4",
+                    help="request sizes for --at, in KiB; each must divide 1024")
     args = ap.parse_args()
+    for k in args.request_kib.split(","):
+        if not k.isdigit() or int(k) < 4 or 1024 % int(k):
+            fail(f"--request-kib {k}: must be 4..1024 KiB and divide 1024")
     if args.step < 1:
         fail("--step must be at least 1 MiB")
 
