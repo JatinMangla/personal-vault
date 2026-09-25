@@ -82,5 +82,13 @@ check("a queued waiter is not a holder", m.lock_holder_listed(LOCKS, "fd:01:555"
 check("same inode on another device is not", m.lock_holder_listed(LOCKS, "fd:02:131077"), False)
 check("an empty table means no drain", m.lock_holder_listed("", "fd:01:131077"), False)
 
+print("stepping aside for anything queued on the session:")
+# 2026-09-25: a restore hit "database is locked" while the scrub held the
+# session. Anything queued behind the scrub's lock must make it step aside.
+check("a queued restore is seen", m.lock_waiter_listed(LOCKS, "fd:01:555"), True)
+check("a holder is not a waiter", m.lock_waiter_listed(LOCKS, "fd:01:131077"), False)
+check("a waiter on another file is ignored", m.lock_waiter_listed(LOCKS, "fd:01:556"), False)
+check("an empty table means nobody waits", m.lock_waiter_listed("", "fd:01:555"), False)
+
 print(f"\npassed={passed} failed={failed}")
 sys.exit(1 if failed else 0)
