@@ -54,6 +54,16 @@ non-global addresses.
   machine is unreachable from the internet. Renaming the machine later would
   issue a new certificate but cannot remove this one.
 
+## DNS on the tailnet (2026-09-26)
+
+The tailnet's nameserver is **Cloudflare (1.1.1.1), with Override on**. Every
+tailnet device except the VM sends its lookups there, through Tailscale,
+instead of to the mobile carrier. That is a privacy change as well as a fix:
+Cloudflare sees the family's lookups instead of the carrier. The VM declines
+tailnet DNS (`tailscale set --accept-dns=false`) and pins its own vault name
+in `/etc/hosts`, so its drain, backups and metrics keep resolving through
+Oracle's resolver and never depend on tailscaled for DNS.
+
 ## Container hardening (plan H4)
 
 `user: 1000:1000`, `read_only: true` with a tmpfs `/tmp`, `cap_drop: [ALL]`,

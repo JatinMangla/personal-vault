@@ -21,7 +21,16 @@ Do not invite any family member until the **go/no-go gates** at the end hold.
 
 <https://login.tailscale.com/admin/dns> → MagicDNS **on**, then *HTTPS
 Certificates* → **Enable**. The certificate names this machine in public
-Certificate Transparency logs (`immich-mumbai`); accepted, see SECURITY-NOTES.
+Certificate Transparency logs (by its Tailscale name, `mangla`); see
+SECURITY-NOTES.
+
+Same page, **Nameservers → Add nameserver → Cloudflare**, and turn **Override
+DNS servers on**. Without it, turning on MagicDNS broke *all* name lookups on
+the owner's Android phone while Tailscale was on (2026-09-26): the phone hands
+every lookup to Tailscale, which could not forward it to the carrier's DNS.
+Every family phone would hit the same wall. The playbook (step 2) keeps the
+VM itself off tailnet DNS, so the drain, restic and metrics resolve names
+exactly as before; do step 2 first if the VM is already on the tailnet.
 
 ### 2. [VM] Get this code onto the VM and deploy
 

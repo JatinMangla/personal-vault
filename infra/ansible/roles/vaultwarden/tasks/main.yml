@@ -30,9 +30,12 @@
   changed_when: false
 
 - name: Derive the vault's HTTPS name from MagicDNS
+  # The name is the node's TAILSCALE machine name, not its Linux hostname:
+  # on this VM that is mangla.tail668f04.ts.net, not immich-mumbai.
   ansible.builtin.set_fact:
     vaultwarden_fqdn: "{{ (vw_ts_status.stdout | from_json).Self.DNSName | default('') | regex_replace('\\.$', '') }}"
     vw_ts_tags: "{{ (vw_ts_status.stdout | from_json).Self.Tags | default([]) }}"
+    vw_ts_ipv4: "{{ (vw_ts_status.stdout | from_json).Self.TailscaleIPs | default([]) | select('search', '^[0-9.]+$') | first | default('') }}"
 
 - name: Require MagicDNS
   ansible.builtin.assert:
@@ -54,6 +57,38 @@
     fail_msg: >-
       This node carries Tailscale tags {{ vw_ts_tags }}. Remove them: the
       access policy for the family relies on the VM staying user-owned.
+
+# --- The VM keeps its own DNS ------------------------------------------------
+# Phones need the tailnet to have a real nameserver with "Override DNS
+# servers" on: without one, Android forwards every lookup through Tailscale to
+# the carrier's DNS, and on the owner's phone that timed out for ALL names
+# (found on the first deploy, 2026-09-26). But Override would also route ALL of
+# this VM's DNS through tailscaled, so a Tailscale hiccup would stop the drain,
+# restic and the metrics push from resolving anything. So the VM declines
+# tailnet DNS and learns the one tailnet name it needs, its own, from
+# /etc/hosts. Public names resolve exactly as before.
+
+- name: Pin the vault's own tailnet name in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ vaultwarden_fqdn | regex_escape }}(\s|$)'
+    line: "{{ vw_ts_ipv4 }} {{ vaultwarden_fqdn }} {{ vaultwarden_fqdn.split('.') | first }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: vw_ts_ipv4 | length > 0
+
+- name: Read whether this node accepts tailnet DNS
+  ansible.builtin.command:
+    cmd: tailscale debug prefs
+  register: vw_ts_prefs
+  changed_when: false
+
+- name: Keep this node on its own DNS
+  ansible.builtin.command:
+    cmd: tailscale set --accept-dns=false
+  when: (vw_ts_prefs.stdout | from_json).CorpDNS | default(false)
+  changed_when: true
 
 # --- Owner email (not a secret, not committed) -----------------------------
 
