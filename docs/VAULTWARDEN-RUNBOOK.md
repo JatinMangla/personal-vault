@@ -32,6 +32,12 @@ Every family phone would hit the same wall. The playbook (step 2) keeps the
 VM itself off tailnet DNS, so the drain, restic and metrics resolve names
 exactly as before; do step 2 first if the VM is already on the tailnet.
 
+Even with Override on, the owner's phone kept timing out on the tailnet name
+itself (`curl: Resolving timed out`), while the VM's resolver answered it
+(`sudo tailscale dns query mangla.tail668f04.ts.net` → `100.88.183.74`). **Updating
+the Tailscale app and restarting the phone fixed it.** After any DNS change
+here, restart the phones before debugging further.
+
 ### 2. [VM] Get this code onto the VM and deploy
 
 The VM deploys from its clone at `~/personal-vault`, so the branch must be on
