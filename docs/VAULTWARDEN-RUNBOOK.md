@@ -36,7 +36,7 @@ ansible-playbook -i inventory.ini vaultwarden.yml -e vaultwarden_owner_email=YOU
 
 `YOU@example.com` is the email you will log in to Vaultwarden with. Later runs
 need no `-e`. The play touches nothing of Immich. It ends by fetching
-`https://immich-mumbai.<tailnet>.ts.net/alive` through `tailscale serve`, so a
+`https://<tailscale name>.<tailnet>.ts.net/alive` through `tailscale serve`, so a
 green run means the whole path works. It fails, with the reason, if MagicDNS or
 HTTPS is off, if the node is tagged, or if `/admin` ever saved a `config.json`.
 
@@ -134,10 +134,10 @@ exactly once, to invite yourself:
 sudo vw-secrets admin-on      # choose a 20+ character admin password
 ```
 
-1. [BROWSER] `https://immich-mumbai.<tailnet>.ts.net/admin` → admin password →
+1. [BROWSER] `https://mangla.tail668f04.ts.net/admin` (the address the playbook printed) → admin password →
    *Users* → **Invite user** → your email. **Do not press Save anywhere.**
 2. [VM] `sudo vw-secrets admin-off` — straight away.
-3. [BROWSER] `https://immich-mumbai.<tailnet>.ts.net` → *Create account* with
+3. [BROWSER] `https://mangla.tail668f04.ts.net` → *Create account* with
    that email. Master password: 4+ random words or 14+ characters, and write it
    on your own paper (it is **not** on the shared kit).
 4. *Settings → Security → Keys* → KDF algorithm **Argon2id** (defaults) → save.

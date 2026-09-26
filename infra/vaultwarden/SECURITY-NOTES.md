@@ -44,10 +44,15 @@ non-global addresses.
 - Family devices reach **only** `vm:443` (`infra/tailscale/policy.hujson`).
   A compromised family phone is still inside the tailnet, hence the rate
   limits above.
-- The `*.ts.net` certificate is published in Certificate Transparency logs,
-  which reveals the hostname `immich-mumbai` (plan M6). Accepted by the owner
-  2026-09-26: the machine stays unreachable from the internet. May be renamed
-  later.
+- The `*.ts.net` certificate is published in Certificate Transparency logs
+  (plan M6). The plan expected it to reveal `immich-mumbai`. In fact the
+  certificate uses the node's **Tailscale machine name**, not its Linux
+  hostname, and the first deploy (2026-09-26) issued it for
+  **`mangla.tail668f04.ts.net`**. That name, the owner's surname, is now
+  public and permanent in those logs. The owner had accepted the M6 exposure
+  and it is still low: the logs reveal a name, never a way in, since the
+  machine is unreachable from the internet. Renaming the machine later would
+  issue a new certificate but cannot remove this one.
 
 ## Container hardening (plan H4)
 
