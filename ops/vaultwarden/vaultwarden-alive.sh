@@ -40,7 +40,7 @@ free_pct() {
   df -P "$1" 2>/dev/null | awk 'NR == 2 && $2 > 0 { printf "%d\n", ($4 * 100) / $2 }'
 }
 
-# The DOMAIN the Ansible role rendered, e.g. https://immich-mumbai.tailXXXX.ts.net
+# The DOMAIN the Ansible role rendered, e.g. https://mangla.tailXXXX.ts.net (the Tailscale machine name, not the Linux hostname)
 vault_url() {
   sed -n 's/^DOMAIN=\(https:\/\/[^[:space:]]*\)$/\1/p' "$VW_ENV" 2>/dev/null | tail -1
 }

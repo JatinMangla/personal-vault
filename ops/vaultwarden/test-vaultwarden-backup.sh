@@ -26,7 +26,10 @@ if [[ "$*" == "exec vaultwarden /vaultwarden backup" ]]; then
   [[ -z "${FAKE_DOCKER_FAIL:-}" ]] || { echo "Error: No such container: vaultwarden"; exit 1; }
   [[ -z "${FAKE_GARBLED:-}" ]] || { echo "something unexpected"; exit 0; }
   echo "sqlite bytes" > "$VW/db_${FAKE_TS}.sqlite3"
-  echo "Backup to '/data/db_${FAKE_TS}.sqlite3' was successful"
+  # 1.37.3 prints a RELATIVE path (found on the first real run, 2026-09-26);
+  # FAKE_ABS_PATH exercises the absolute form a later release might print.
+  if [[ -n "${FAKE_ABS_PATH:-}" ]]; then p="/data"; else p="data"; fi
+  echo "Backup to '$p/db_${FAKE_TS}.sqlite3' was successful"
   exit 0
 fi
 exit 1
@@ -106,6 +109,13 @@ check "existing repo is not re-initialised" '! grep -q "^init" "$W/calls"'
 check "status ok" 'grep -q "^ok " "$W/state/vaultwarden-backup-status"'
 check "healthchecks: start then success" \
   'grep -qx "https://hc-ping.com/hc-vw/start" "$W/pings" && grep -qx "https://hc-ping.com/hc-vw" "$W/pings"'
+
+echo "== an absolute /data/... path is accepted too =="
+setup "OFFSITE_REPOSITORY=rclone:gdrive:personal-vault-offsite"
+rc=0; PATH="$T/bin:$PATH" OPS_ENV_FILE="$W/ops.env" CALLS="$W/calls" PINGS="$W/pings" VW="$W/vw" \
+  FAKE_TS="20260926_023000" FAKE_ABS_PATH=1 bash "$SCRIPT" > "$W/out" 2>&1 || rc=$?
+check "succeeds" '[[ "$rc" == 0 ]]'
+check "the dump lands in backups/" '[[ -f "$W/vw/backups/db_20260926_023000.sqlite3" ]]'
 
 echo "== first night: repository is created =="
 setup "OFFSITE_REPOSITORY=rclone:gdrive:personal-vault-offsite"
