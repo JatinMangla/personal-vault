@@ -96,35 +96,27 @@ working from its own offline copy, and can read and autofill, for weeks.
 
 ## Test the kit (do this after filling it in, and after any change)
 
-Type the restic password **from the paper**, not by copy-paste, and check that it
-opens the real repository. This reads one small object from Object Storage.
-It takes no lock, so it is safe while the drain or the backup runs. Nothing is
-written to disk except a RAM-backed temp file that is removed at the end.
+Each test is **one line**. restic itself asks for the password, with the input
+hidden: type it **from the paper**, not by copy-paste. It reads one small
+object and takes no lock, so it is safe while the drain or a backup runs, and
+nothing is written anywhere.
+
+Paste one line at a time. A line pasted together with others would be read
+as the "password" (this bit the first real test, 2026-09-26).
 
 ```bash
-# [VM] over Tailscale SSH (Termux is fine)
-install -m 0600 /dev/null /dev/shm/kit-test
-read -rs -p 'restic password, typed from the paper: ' p; printf '%s' "$p" > /dev/shm/kit-test; unset p; echo
-sudo bash -c 'set -a; . /etc/personal-vault/ops.env; set +a
-  export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}"
-  export AWS_ACCESS_KEY_ID="$OCI_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$OCI_SECRET_KEY" AWS_DEFAULT_REGION="$OCI_REGION"
-  export RESTIC_CACHE_DIR=/var/lib/personal-vault/restic-cache
-  restic --no-lock --password-file /dev/shm/kit-test cat config >/dev/null \
-    && echo "PAPER OK" || echo "PAPER WRONG - correct the paper, then test again"'
-shred -u /dev/shm/kit-test
+# [VM] A1 - the Oracle backup
+sudo bash -c 'set -a; . /etc/personal-vault/ops.env; set +a; unset RESTIC_PASSWORD_FILE RESTIC_PASSWORD; export RESTIC_REPOSITORY="s3:https://${OCI_NAMESPACE}.compat.objectstorage.${OCI_REGION}.oraclecloud.com/${OCI_BUCKET}" AWS_ACCESS_KEY_ID="$OCI_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$OCI_SECRET_KEY" AWS_DEFAULT_REGION="$OCI_REGION"; restic --no-lock cat config >/dev/null && echo "PAPER OK"'
 ```
-
-**The off-Oracle password (A4)** is tested the same way, once the Google
-Drive copy exists (`docs/VAULTWARDEN-RUNBOOK.md` step 4). Use the same first
-two lines, then:
 
 ```bash
-sudo bash -c 'export RESTIC_REPOSITORY=rclone:gdrive:personal-vault-offsite
-  export RCLONE_CONFIG=/var/lib/personal-vault/rclone/rclone.conf
-  restic --no-lock --password-file /dev/shm/kit-test cat config >/dev/null \
-    && echo "PAPER OK" || echo "PAPER WRONG - correct the paper, then test again"'
-shred -u /dev/shm/kit-test
+# [VM] A4 - the off-Oracle copy on Google Drive
+sudo RESTIC_REPOSITORY=rclone:gdrive:personal-vault-offsite RCLONE_CONFIG=/var/lib/personal-vault/rclone/rclone.conf restic --no-lock cat config >/dev/null && echo "PAPER OK"
 ```
+
+`PAPER OK` means the paper is right. "wrong password or no key found" means
+it is not: look for `0`/`O`, `l`/`1`/`I` and `+`/`/`, correct the paper, and
+test again.
 
 The recovery code (A2) is exercised by step 4 of the deploy order in
 `docs/BUILD-STATE.md` ("Forgot passphrase?").

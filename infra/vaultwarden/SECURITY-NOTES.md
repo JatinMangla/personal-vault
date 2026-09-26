@@ -28,6 +28,16 @@ Weak family passwords are the way this system actually gets broken. Defences:
 | Organisation policy: two-step login required (online attacks) | Policies |
 | Login rate limit 10 per burst, 1 per 60 s, **per client IP** | `vaultwarden.env.j2` |
 
+**Owner decisions at setup (2026-09-26), different from the plan:**
+- Master password minimum **12** characters, not 14, with complexity **Strong**.
+  Strong rejects the guessable 12-character passwords; the family guide asks
+  for 4+ random words, which is stronger than either length.
+- **Require two-step login: off** for the organisation, so relatives without an
+  authenticator app are not blocked or locked out. The cost: a phished or
+  guessed master password alone opens that member's vault, for someone who is
+  also inside the tailnet. The owner's own account keeps two-step login on;
+  others are encouraged to use it.
+
 **The per-IP part needed a fix the plan missed.** Behind `tailscale serve`,
 every request reaches the container from the Docker gateway, so without a
 client-IP header the whole family would share one rate-limit bucket, and one
@@ -126,6 +136,14 @@ wrong: the relay also receives **user, device and item UUIDs and change
 timestamps**. It never receives names, URLs or contents, which stay
 encrypted. Recorded in the budget ledger. Removable with `sudo vw-secrets
 push-off`; clients then sync on open and every few minutes instead.
+
+**Observed 2026-09-26:** on the owner's OPPO (ColorOS) a web-vault change did
+not reach the open app by push; a manual sync did. The server side checked
+out: no relay errors in the log, and the phone was registered
+(`devices.push_token` set). The likely cause is ColorOS holding back
+background messages. Accepted by the owner: pull to sync. Push stays on for
+family phones where it may work; if it proves useless everywhere, `push-off`
+also ends the metadata above.
 
 ## No outbound fetches
 

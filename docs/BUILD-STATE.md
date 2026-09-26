@@ -19,6 +19,26 @@ every deviation). Owner's deployment steps, in order:
 this branch and follow the runbook from step 1. Do not invite family until the
 five gates at the end of the runbook hold.
 
+### Deployed 2026-09-26 (PRs #14, #15)
+
+Live at `https://mangla.tail668f04.ts.net` (the node's Tailscale name is
+`mangla`; see SECURITY-NOTES on Certificate Transparency).
+
+| Gate (plan §5) | State |
+|---|---|
+| 1. restic green, repo < 85% | **Met** (312 MiB) |
+| 2. Off-Oracle copy ran once | **Met** 13:37 UTC: dump + restic to Google Drive, `check` no errors |
+| 3. Tailscale policy + drain within noise | Open: family not invited yet |
+| 4. Paper kit tested | **Met**: A1 and A4 both `PAPER OK` |
+| 5. Restore drill PASS | Open: after the first 03:00 run carrying the vault |
+
+What the first deploy found, all fixed and recorded: the HTTPS name is the
+Tailscale machine name; turning on MagicDNS broke all DNS on the owner's
+Android phone until the tailnet got Cloudflare with Override (VM kept off
+tailnet DNS) and the app was updated and the phone restarted; `/vaultwarden
+backup` prints a *relative* path; pasting the kit's old two-block test let
+`read` swallow the next line.
+
 ### Phase 0 findings, from the live `metrics_samples`
 
 | Step | State |
