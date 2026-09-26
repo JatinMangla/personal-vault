@@ -66,10 +66,14 @@ on_error() {
 }
 trap on_error ERR
 
-# `/vaultwarden backup` prints: Backup to '/data/db_20260926_023000.sqlite3' was successful
-# Returns the in-container path, or nothing if the line is absent.
+# `/vaultwarden backup` prints: Backup to 'data/db_20260926_023000.sqlite3' was successful
+# The path is RELATIVE in 1.37.3 (DATABASE_URL defaults to data/db.sqlite3,
+# resolved from the image's WORKDIR /), which the first real run found on
+# 2026-09-26. An absolute /data/... form is accepted too, in case a later
+# release or an explicit DATABASE_URL changes it.
+# Returns the dump's path relative to the data dir, or nothing if absent.
 dump_path_from_output() {
-  sed -n "s|^Backup to '\(/data/db_[0-9]\{8\}_[0-9]\{6\}\.sqlite3\)' was successful.*|\1|p" <<< "$1" | tail -1
+  sed -n "s|^Backup to '/\{0,1\}data/\(db_[0-9]\{8\}_[0-9]\{6\}\.sqlite3\)' was successful.*|\1|p" <<< "$1" | tail -1
 }
 
 # Keep the newest N dumps in DIR. The UTC timestamp is in the name, so name
@@ -98,9 +102,9 @@ chmod 0700 "$VW_DATA/backups"
 if ! out="$(docker exec "$VW_CONTAINER" /vaultwarden backup 2>&1)"; then
   fail "docker exec $VW_CONTAINER /vaultwarden backup failed: $out"
 fi
-in_container="$(dump_path_from_output "$out")"
-[[ -n "$in_container" ]] || fail "could not find the dump path in: $out"
-dump="$VW_DATA/${in_container#/data/}"
+dump_name="$(dump_path_from_output "$out")"
+[[ -n "$dump_name" ]] || fail "could not find the dump path in: $out"
+dump="$VW_DATA/$dump_name"
 [[ -s "$dump" ]] || fail "dump $dump is missing or empty"
 
 integrity="$(sqlite3 -readonly "$dump" 'PRAGMA integrity_check;' 2>&1 || true)"
