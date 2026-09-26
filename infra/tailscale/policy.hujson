@@ -1,0 +1,79 @@
+// Tailscale access policy for the owner's tailnet (docs/VAULTWARDEN-PLAN.md, C3).
+//
+// NOT applied automatically. Paste it into https://login.tailscale.com/admin/acls
+// only after the checks in docs/RUNBOOK.md -> "Vaultwarden: apply the family
+// access policy", with NO drain running. Today the tailnet runs the default
+// allow-everything policy; this file replaces it.
+//
+// The whole design in two rules:
+//   1. The owner reaches everything, exactly as today: SSH (22), Immich (2283),
+//      Syncthing (22000 tcp+udp) and every owner device to every other. The
+//      phone -> VM Syncthing path feeds the Insta360 drain, so it must not change.
+//   2. group:family reaches ONE thing: the password vault, HTTPS on the VM.
+//
+// The VM is deliberately NOT tagged. A tagged node stops being owned by the
+// owner's user, which silently changes which rules match it - including
+// rule 1 for the VM's own outbound Syncthing connections. The `hosts` alias
+// names it instead. (The Ansible role refuses to deploy on a tagged node.)
+//
+// Free plan: 6 users, unlimited devices, 3 groups. This uses 1 group.
+{
+	"groups": {
+		// Each family member's Tailscale login, exactly as the admin console
+		// Users page shows it. Up to 5 besides the owner on the free plan.
+		"group:family": [
+			// "member.one@gmail.com",
+		],
+	},
+
+	"hosts": {
+		// immich-mumbai (docs/BUILD-STATE.md). Check it is still current:
+		//   tailscale ip -4    on the VM
+		"vm": "100.88.183.74",
+	},
+
+	"grants": [
+		// 1. The owner: unchanged from today's allow-all.
+		{
+			"src": ["autogroup:owner"],
+			"dst": ["*"],
+			"ip":  ["*"],
+		},
+		// 2. Family: the vault and nothing else. Not SSH, not Immich, not
+		//    Syncthing, not each other's devices, not the owner's devices.
+		{
+			"src": ["group:family"],
+			"dst": ["vm"],
+			"ip":  ["tcp:443"],
+		},
+	],
+
+	// Tailscale's default SSH rule, kept unchanged so this edit changes access
+	// rules only. The VM does not use Tailscale SSH (--ssh=false); owner SSH
+	// to it is plain OpenSSH on port 22, covered by grant 1.
+	"ssh": [
+		{
+			"action": "check",
+			"src":    ["autogroup:member"],
+			"dst":    ["autogroup:self"],
+			"users":  ["autogroup:nonroot", "root"],
+		},
+	],
+
+	// Tests run on every save; a failing test blocks the save. Replace the
+	// placeholders with real logins BEFORE saving (a test naming a user who
+	// is not in the tailnet fails).
+	"tests": [
+		// The owner keeps every existing path.
+		// {
+		// 	"src":    "OWNER_LOGIN@example.com",
+		// 	"accept": ["vm:22", "vm:443", "vm:2283", "vm:22000"],
+		// },
+		// A family member reaches the vault only.
+		// {
+		// 	"src":    "member.one@gmail.com",
+		// 	"accept": ["vm:443"],
+		// 	"deny":   ["vm:22", "vm:2283", "vm:22000", "vm:8384", "vm:80"],
+		// },
+	],
+}

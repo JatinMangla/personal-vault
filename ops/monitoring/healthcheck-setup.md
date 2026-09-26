@@ -14,8 +14,9 @@ reporting success**. Silence is the alarm.
 
 ## Free tier
 
-20 checks, unlimited pings, email notification. This project uses two, so there
-is ample headroom. No credit card.
+20 checks, unlimited pings, email notification. This project uses six (the
+four in the README ledger plus the two Vaultwarden checks below), so there is
+ample headroom. No credit card.
 
 ## Checks to create
 
@@ -59,6 +60,30 @@ dashboard.
 Deliberately loose. The external drive is connected manually, so this is a
 nudge rather than an alarm. Set `HEALTHCHECK_VIDEO_UUID` in `ops.env` to enable.
 
+### 4. `vaultwarden-backup`
+
+| Setting | Value |
+|---|---|
+| Schedule | Cron: `30 2 * * *` |
+| Timezone | **UTC** (the VM's clock; the timer fires at 02:30 VM time) |
+| Grace period | **1 hour** |
+
+`ops/vaultwarden/vaultwarden-backup.sh`: the nightly dump plus the encrypted
+off-Oracle copy. Pings `/start`, success, `/fail` or `/<exit-code>`. A run with
+the off-Oracle copy not configured is a `/fail`, on purpose.
+
+### 5. `vaultwarden-alive`
+
+| Setting | Value |
+|---|---|
+| Schedule | Period: **5 minutes** |
+| Grace period | **10 minutes** |
+
+`ops/vaultwarden/vaultwarden-alive.sh`: the vault answers on loopback and on
+its HTTPS tailnet name, no `config.json`, and at least 15% free on the boot
+volume. The reason for a `/fail` is in the ping body, so it shows in the
+alert.
+
 ## Configuration
 
 Add the UUIDs to `/etc/personal-vault/ops.env` (mode 0600, never committed):
@@ -67,6 +92,8 @@ Add the UUIDs to `/etc/personal-vault/ops.env` (mode 0600, never committed):
 HEALTHCHECK_UUID=            # immich-nightly-backup
 HEALTHCHECK_METRICS_UUID=    # metrics-collector
 HEALTHCHECK_VIDEO_UUID=      # optional
+HEALTHCHECK_VW_BACKUP_UUID=  # vaultwarden-backup
+HEALTHCHECK_VW_ALIVE_UUID=   # vaultwarden-alive
 ```
 
 A ping URL is a capability: anyone holding it can signal "success" and suppress

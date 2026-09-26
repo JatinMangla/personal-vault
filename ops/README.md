@@ -8,12 +8,17 @@
 >
 > Store it in **at least two** places that are not the Oracle VM:
 >
-> - a password manager that syncs off this machine
-> - a printed copy somewhere physical
+> - the paper emergency kit, `docs/EMERGENCY-KIT.md`, in two buildings
+> - an encrypted copy in the document vault (`vault/`), which runs on Vercel +
+>   Supabase, not Oracle
 >
-> Record where you put it in your own notes. Do not record the value anywhere in
-> this repository, and do not store it only in `/root/.restic-pass` on the box
-> being backed up — a machine failure would take the password with it.
+> **Never keep it only in a password manager hosted on this VM** (the planned
+> Vaultwarden, `docs/VAULTWARDEN-PLAN.md` C4). If the VM is lost, that password
+> manager and the backup this password unlocks are lost together.
+>
+> Do not record the value anywhere in this repository, and do not store it only
+> in `/root/.restic-pass` on the box being backed up — a machine failure would
+> take the password with it.
 
 ---
 
@@ -29,9 +34,17 @@ ops/
 │   └── collect-and-push.sh  Every 1 min, outbound push to Vercel.
 ├── monitoring/
 │   └── healthcheck-setup.md Dead-man's switch configuration.
-├── systemd/                 Two services and two timers.
-└── RESTORE-LOG.md           Appended by restore-test.sh. The audit trail.
+├── vaultwarden/             The family password manager's backup, drill and alive check
+│   ├── vaultwarden-backup.sh       02:30: consistent dump + encrypted off-Oracle copy
+│   ├── vaultwarden-restore-test.sh The Vaultwarden drill: both copies, PASS/FAIL
+│   └── vaultwarden-alive.sh        Every 5 min: alive, HTTPS, config.json, free space
+├── systemd/                 Services and timers for all of the above.
+├── RESTORE-LOG.md           Appended by restore-test.sh. The audit trail.
+└── VAULTWARDEN-RESTORE-LOG.md Appended by vaultwarden-restore-test.sh.
 ```
+
+Vaultwarden itself is deployed from `infra/vaultwarden/`; its operations,
+including installing these timers, are in `docs/VAULTWARDEN-RUNBOOK.md`.
 
 ## Installation on the VM
 
@@ -66,6 +79,13 @@ systemctl list-timers 'immich-backup*' 'metrics-push*'
 | `thumbs/` | no | Derived; Immich regenerates on demand |
 | `encoded-video/` | no | Derived; the original is never removed |
 | `*.mp4`, `*.mov`, … | no | Bulk of the gigabytes; goes to the home drive |
+
+Also in every nightly snapshot, from outside `/mnt/media`:
+
+| Path | Why |
+|---|---|
+| `uploaded.sha256`, `manifest.sha256` | The Insta360 ledger: the only record of what Telegram holds |
+| `/var/lib/vaultwarden/{backups,attachments,sends}`, `rsa_key*` | The password vault's consistent 02:30 dumps. Never the live `db.sqlite3`, whose `-wal` makes a mid-write copy unsafe |
 
 Excluding the two derived directories is the entire reason the repository fits
 inside Oracle's ~10 GiB free tier — it only ever holds originals. Immich's own

@@ -279,7 +279,8 @@ sudo systemctl enable --now immich-backup.timer metrics-push.timer
 > ### THE RESTIC PASSWORD MUST BE STORED OFF THIS MACHINE
 >
 > Losing it is identical to losing the backup. There is no reset and no support
-> ticket. Put it in your password manager **and** on paper.
+> ticket. Put it on the paper emergency kit (`docs/EMERGENCY-KIT.md`) **and** in
+> the document vault. Never only in a password manager hosted on this VM.
 
 Run one backup by hand, then the drill:
 

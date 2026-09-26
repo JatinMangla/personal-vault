@@ -1,0 +1,62 @@
+# Vaultwarden, the family password manager (docs/VAULTWARDEN-PLAN.md).
+#
+# A SEPARATE compose project from Immich (`name: vaultwarden`), so deploying,
+# updating or restarting it never touches the photo stack or the drain.
+#
+# DEPLOYED, NOT FORKED. All encryption happens in the official Bitwarden apps;
+# this server only stores ciphertext. Upstream image, pinned.
+#
+# Installed to /opt/vaultwarden by infra/ansible/vaultwarden.yml. Two env files:
+#   vaultwarden.env  rendered by Ansible, no secrets (still 0600)
+#   secrets.env      push keys, optional admin token and SMTP, written only by
+#                    infra/vaultwarden/vw-secrets.sh, never by Ansible, never in git
+#
+# Reached ONLY through `tailscale serve` (HTTPS on the tailnet name, port 443),
+# which proxies to 127.0.0.1:8222. Nothing listens on a public address.
+
+name: vaultwarden
+
+services:
+  vaultwarden:
+    container_name: vaultwarden
+    # PINNED TO THE MULTI-ARCH INDEX DIGEST, not a single-platform manifest
+    # (plan M4). Verified 2026-09-26: this index lists linux/arm64
+    # (sha256:cdf1fc49...), linux/amd64 and linux/arm/v6+v7. Updating is a
+    # deliberate act: docs/RUNBOOK.md -> "Vaultwarden: security updates".
+    image: docker.io/vaultwarden/server:1.37.3@sha256:1587c45feaa479f1f5e8af3b00eded36bff77bcf1880cf8dbf0541706dd470e0
+    restart: always
+
+    # Hardening (plan H4). Runs as the unprivileged uid that owns
+    # /var/lib/vaultwarden, cannot write its own filesystem, holds no Linux
+    # capabilities and cannot gain any. ROCKET_PORT=8080 (vaultwarden.env)
+    # because a non-root process cannot bind port 80.
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    env_file:
+      - vaultwarden.env
+      - secrets.env
+
+    volumes:
+      # Boot volume (Balanced), not the 0-VPU block volume: SQLite wants low
+      # latency, and this is a few MB. See plan M3 for the free-space guard.
+      - /var/lib/vaultwarden:/data
+
+    ports:
+      # Loopback only. tailscale serve is the one client of this port.
+      - "127.0.0.1:8222:8080"
+
+    # Idle footprint is tens of MB. The CPU cap bounds a burst of logins
+    # (server-side PBKDF2, plan M5) so it can never take both cores from the
+    # drain. 1.0 until the M5 login timing says a lower cap stays under ~1 s.
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 256
+
+    # The image's own HEALTHCHECK (curl /alive every 60 s) applies unchanged.

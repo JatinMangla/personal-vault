@@ -35,7 +35,10 @@ ProtectSystem=strict
 # while letting restic read the one file it cannot run without.
 ProtectHome=read-only
 ReadWritePaths=/var/lib/personal-vault /tmp
-ReadOnlyPaths=/mnt/media /root/.restic-pass
+# /var/lib/vaultwarden: the password vault's consistent dumps ride along
+# (docs/VAULTWARDEN-PLAN.md). The leading "-" lets the unit start on a host
+# without Vaultwarden instead of failing on a missing path.
+ReadOnlyPaths=/mnt/media /root/.restic-pass -/var/lib/vaultwarden
 
 # restic caches pack indexes under $HOME/.cache/restic by default. /root is
 # read-only here, so it logged "unable to open cache: read-only file system"

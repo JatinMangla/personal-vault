@@ -4,7 +4,8 @@ Read this at the start of every session. It overrides default behaviour.
 
 ## What this project is
 A personal media and document archive. Three components:
-- `infra/`  — DEPLOY Immich on Oracle. Do not write photo-app code.
+- `infra/`  — DEPLOY Immich and Vaultwarden on Oracle. Do not write photo-app
+  or password-manager code; both are upstream images, pinned.
 - `vault/`  — BUILD a Next.js E2EE document vault on Vercel + R2 + Supabase.
 - `ops/`    — BUILD backup and monitoring automation.
 
@@ -61,6 +62,8 @@ next action is. Update it at the end of any session that advances a phase.
 
 Reading order for a new session: this file → `docs/BUILD-STATE.md` →
 `docs/REVIEW-2026-09-24.md` (latest review, open items, deploy order) →
-`docs/HARD-WON.md` before touching the Telegram pipeline. For the drain's
+`docs/HARD-WON.md` before touching the Telegram pipeline, and
+`docs/VAULTWARDEN-PLAN.md` + `infra/vaultwarden/SECURITY-NOTES.md` before
+touching the family password manager. For the drain's
 speed work specifically, `docs/SESSION-FINDINGS-2026-09-19.md` records how the
 current timings were reached and which predictions the measurements falsified.

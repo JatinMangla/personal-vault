@@ -1,0 +1,37 @@
+---
+# Deploys Vaultwarden ONLY (docs/VAULTWARDEN-PLAN.md). Kept apart from
+# playbook.yml on purpose: that playbook restarts Immich's Postgres on every
+# run, and adding a password manager must not interrupt the photo stack or a
+# drain in progress.
+#
+# On the VM, from the repo clone (inventory as in infra/docs/WINDOWS-DEPLOY.md):
+#
+#   cd ~/personal-vault/infra/ansible
+#   ansible-playbook -i inventory.ini vaultwarden.yml \
+#     --extra-vars "vaultwarden_owner_email=you@example.com"   # first run only
+#
+# Idempotent: a second run changes nothing.
+
+- name: Deploy Vaultwarden for the family
+  hosts: immich
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify the target is ARM64
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture == "aarch64"
+        fail_msg: "Expected aarch64 (Oracle A1), got {{ ansible_architecture }}."
+
+    - name: Require Docker and Tailscale from the main playbook
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - docker compose version
+        - tailscale version
+      changed_when: false
+
+  roles:
+    - role: vaultwarden
+      tags: [vaultwarden]

@@ -110,6 +110,8 @@ jobs:
             ops/backup/*.sh \
             ops/metrics/*.sh \
             ops/insta360-bin/*.sh \
+            ops/vaultwarden/*.sh \
+            infra/vaultwarden/*.sh \
             .claude/hooks/*.sh
 
       - name: Shell scripts parse under bash
@@ -120,7 +122,7 @@ jobs:
         # this catches the parse failures and the grep below catches the rest.
         run: |
           set -euo pipefail
-          for f in ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh .claude/hooks/*.sh; do
+          for f in ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh ops/vaultwarden/*.sh infra/vaultwarden/*.sh .claude/hooks/*.sh; do
             bash -n "$f" || { echo "SYNTAX ERROR: $f"; exit 1; }
           done
           echo "all shell scripts parse"
@@ -133,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           if grep -rnE ']] +[{]|null +[{]|>/dev/null +[a-z]' \
-               ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh .claude/hooks/*.sh; then
+               ops/backup/*.sh ops/metrics/*.sh ops/insta360-bin/*.sh ops/vaultwarden/*.sh infra/vaultwarden/*.sh .claude/hooks/*.sh; then
             echo "BLOCKER: a shell operator looks to have been eaten - see docs/HARD-WON.md"
             exit 1
           fi
@@ -216,6 +218,36 @@ jobs:
         # machine without Python. Byte-compiling catches a syntax error here
         # rather than on the VM, mid-drain.
         run: python3 -m py_compile ops/insta360-bin/*.py
+
+      - name: Nightly backup fixtures
+        # Runs the shipped immich-backup.sh against stubbed restic. Pins that a
+        # guard refusal publishes the size it refused on (for eight days in
+        # 2026-09 /status showed 291 MiB while the repository held ~71 GB), and
+        # that Vaultwarden's dumps ride along without the live database.
+        run: bash ops/backup/test-immich-backup.sh
+
+      - name: Vaultwarden backup fixtures
+        # Only an integrity-checked dump enters the retention window; the
+        # off-Oracle copy never runs with the Oracle job's credentials; an
+        # unconfigured off-Oracle copy is a visible /fail, not a quiet pass.
+        run: bash ops/vaultwarden/test-vaultwarden-backup.sh
+
+      - name: Vaultwarden alive-check fixtures
+        # Each of the four conditions (loopback, HTTPS via tailscale serve,
+        # config.json, boot-volume free space) must turn the ping into /fail
+        # with its reason.
+        run: bash ops/vaultwarden/test-vaultwarden-alive.sh
+
+      - name: Vaultwarden restore-drill fixtures
+        # Which dump the drill restores (by name, not mtime) and when it may
+        # say PASS (both copies) versus PASS (ORACLE-ONLY) or FAIL.
+        run: bash ops/vaultwarden/test-vaultwarden-drill.sh
+
+      - name: Vaultwarden secrets-helper fixtures
+        # vw-secrets is the only writer of secrets.env: no secret in its output
+        # or in argv, the admin token stored only as Argon2id, and a rejected
+        # input changes nothing.
+        run: bash infra/vaultwarden/test-vw-secrets.sh
 
       - name: Metrics payload JSON-safety fixtures
         # The metrics payload is a heredoc: one unescaped quote or a non-number

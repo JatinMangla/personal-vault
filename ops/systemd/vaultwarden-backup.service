@@ -1,0 +1,37 @@
+[Unit]
+Description=Vaultwarden nightly dump and encrypted off-Oracle copy
+Documentation=file:///opt/personal-vault/ops/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/personal-vault/ops/vaultwarden/vaultwarden-backup.sh
+
+# A few MB per night, but kept out of the way of a drain all the same.
+Nice=10
+IOSchedulingClass=idle
+CPUWeight=20
+IOWeight=20
+TimeoutStartSec=30min
+
+# Hardening, as immich-backup.service. It writes the dump directory and its own
+# state (rclone refreshes its OAuth token into rclone.conf there), reads the
+# off-Oracle password, and reaches Docker and the network. Nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/vaultwarden /var/lib/personal-vault /tmp
+ReadOnlyPaths=-/root/.restic-offsite-pass
+Environment=RESTIC_CACHE_DIR=/var/lib/personal-vault/restic-cache
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

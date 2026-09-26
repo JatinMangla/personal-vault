@@ -1,0 +1,24 @@
+[Unit]
+Description=Vaultwarden dead-man's switch (alive, HTTPS, config.json, free space)
+Documentation=file:///opt/personal-vault/ops/README.md
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/personal-vault/ops/vaultwarden/vaultwarden-alive.sh
+TimeoutStartSec=60s
+
+# Read-only by construction: it curls, stats and runs df. It never writes.
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
