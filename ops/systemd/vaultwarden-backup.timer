@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Vaultwarden backup nightly at 02:30
+Documentation=file:///opt/personal-vault/ops/README.md
+
+[Timer]
+# 02:30, so the 03:00 restic job (immich-backup.timer) carries tonight's dump
+# to Oracle Object Storage as well. The off-Oracle copy goes out in this run.
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=300
+Persistent=true
+Unit=vaultwarden-backup.service
+
+[Install]
+WantedBy=timers.target

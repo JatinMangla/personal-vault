@@ -1,11 +1,56 @@
 # Build state and next actions
 
-Last updated: **2026-09-24**
+Last updated: **2026-09-26**
 
 Everything buildable without cloud accounts is complete and verified. What
 remains requires provisioning, which needs your credentials.
 
 ---
+
+## P9 — family password manager (Vaultwarden): BUILT, NOT DEPLOYED (2026-09-26)
+
+Branch `feat/vaultwarden`, committed, **not pushed** (owner's call).
+Plan and adversarial review: `docs/VAULTWARDEN-PLAN.md` (§9 = what was built and
+every deviation). Owner's deployment steps, in order:
+**`docs/VAULTWARDEN-RUNBOOK.md`**. Security decisions:
+`infra/vaultwarden/SECURITY-NOTES.md`.
+
+**Next action (owner):** print and fill `docs/EMERGENCY-KIT.md`, then push/merge
+this branch and follow the runbook from step 1. Do not invite family until the
+five gates at the end of the runbook hold.
+
+### Phase 0 findings, from the live `metrics_samples`
+
+| Step | State |
+|---|---|
+| restic green, repo shrunk | **Done 2026-09-24**, never recorded until now. Green nightly 09-24 20:44, 09-25 03:03, 09-26 03:00 UTC; 312 MiB of 10,240 |
+| Stale size on `/status` | **Fixed.** `repo-stats.json` was written only on success, so for 8 failed days the dashboard showed 291 MiB while the repository held ~71 GB. The guard now publishes the size it refuses on |
+| Paper emergency kit | Template `docs/EMERGENCY-KIT.md`; `ops/README.md` no longer points the restic password at "a password manager". **Owner: print, fill, test** |
+| 7-day headroom (M8) | Memory in use 10.5% at p95, load1 0.25 at p95, boot volume max 28.7%. Ample room for Vaultwarden. **But the VM may meet Oracle's idle-reclaim criteria** (all three < 20%). Owner: check OCI's own metrics and the trial end date (plan §8 Q5) |
+
+### Verified in this repository (2026-09-26)
+
+| Check | Result |
+|---|---|
+| `ops/backup/test-immich-backup.sh` (new, end to end) | **24/24**; the previous script fails 8 of them (negative control) |
+| `ops/vaultwarden/test-vaultwarden-backup.sh` | **32/32** |
+| `ops/vaultwarden/test-vaultwarden-alive.sh` | **17/17** |
+| `ops/vaultwarden/test-vaultwarden-drill.sh` | **8/8** |
+| `infra/vaultwarden/test-vw-secrets.sh` | **32/32** |
+| shellcheck 0.9.0 `-S warning`, `bash -n`, eaten-operator grep | clean over every CI-scanned script |
+| YAML (22 files) and the env template render | all parse |
+| Image `vaultwarden/server:1.37.3` index digest `sha256:1587c45f…470e0` | lists `linux/arm64` (registry, 2026-09-26) |
+
+**Not verifiable here** (no Docker/Ansible on this machine): the playbook run,
+the container under `read_only` + uid 1000, `tailscale serve`, the drill. Each
+is exercised by the runbook, and the playbook fails with the reason if any
+precondition is missing.
+
+### Owner decisions 2026-09-26
+
+Admin Password Reset **off**; off-Oracle copy on **Google Drive**; hostname
+**stays `immich-mumbai`**; **5 people** including the owner (5 of 6 Tailscale
+users). Open: idle-reclaim response (Q5), SMTP for Emergency Access (Q7).
 
 ## 2026-09-24 — whole-project review, fixes on branch `review-hardening`
 

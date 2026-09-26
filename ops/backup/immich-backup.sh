@@ -167,6 +167,12 @@ if restic stats --mode raw-data --json > "$STATE_DIR/size-check.json" 2>/dev/nul
   repo_now=$(jq -r '.total_size // 0' < "$STATE_DIR/size-check.json" 2>/dev/null || echo 0)
   guard_at=$(( FREE_TIER_BYTES * GUARD_PCT / 100 ))
   log "repository at $(( repo_now / 1048576 )) MiB of $(( FREE_TIER_BYTES / 1048576 )) MiB free tier"
+  # Publish the fresh size BEFORE the guard can refuse. repo-stats.json used to
+  # be written only at the end of a successful run, so from 2026-09-17 to 09-24
+  # /status showed a stale 291 MiB while the real repository was ~71 GB - the
+  # one number that explained the failure was the one the dashboard hid.
+  cp -f "$STATE_DIR/size-check.json" "$STATE_DIR/repo-stats.json"
+  chmod 0644 "$STATE_DIR/repo-stats.json"
   if (( repo_now > guard_at )); then
     err "Prune old snapshots or move to a larger target. Oracle deletes ALL objects"
     err "if the tenancy is over its limit when the Free Trial ends."
@@ -195,6 +201,27 @@ if (( ${#ARCHIVE_EXTRA[@]} > 0 )); then
   log "including archive ledger: ${ARCHIVE_EXTRA[*]}"
 fi
 
+# Vaultwarden rides along too (docs/VAULTWARDEN-PLAN.md, Phase 2). Its own
+# variable, NOT ARCHIVE_LEDGER_FILES: setting that one replaces its defaults, so
+# sharing it would let a ledger override silently drop the password vault.
+#
+# Only the consistent copies are taken: backups/ holds the VACUUM INTO dumps that
+# vaultwarden-backup.sh writes at 02:30, never the live db.sqlite3, whose -wal
+# file makes a mid-write copy unsafe to restore. The excludes below keep that
+# true even if VAULTWARDEN_PATHS is widened to the whole data directory.
+# rsa_key* is a glob on purpose: expanded here, it matches whatever key files
+# the running version keeps, and nothing when there are none.
+VAULTWARDEN_DATA="${VAULTWARDEN_DATA:-/var/lib/vaultwarden}"
+VAULTWARDEN_EXTRA=()
+for p in ${VAULTWARDEN_PATHS:-$VAULTWARDEN_DATA/backups $VAULTWARDEN_DATA/attachments $VAULTWARDEN_DATA/sends $VAULTWARDEN_DATA/rsa_key*}; do
+  if [[ -e "$p" ]]; then
+    VAULTWARDEN_EXTRA+=("$p")
+  fi
+done
+if (( ${#VAULTWARDEN_EXTRA[@]} > 0 )); then
+  log "including vaultwarden: ${VAULTWARDEN_EXTRA[*]}"
+fi
+
 # tg-staging is EXCLUDED. It is the Insta360 drain's working area - tens of GB
 # of footage in transit, plus Check #2's .roundtrip downloads - and none of it
 # is meant for restic: the footage goes to Telegram, and it could never fit the
@@ -204,7 +231,10 @@ fi
 # silent exit - see refuse()). The exact failing step is in that night's
 # journal. Excluding staging also stops this job reading tens of GB per night
 # on the disk the drain is using - faster for both.
-restic backup "$MEDIA_DIR" "${ARCHIVE_EXTRA[@]}" \
+restic backup "$MEDIA_DIR" "${ARCHIVE_EXTRA[@]}" "${VAULTWARDEN_EXTRA[@]}" \
+  --exclude "$VAULTWARDEN_DATA/db.sqlite3*" \
+  --exclude "$VAULTWARDEN_DATA/icon_cache" \
+  --exclude "$VAULTWARDEN_DATA/tmp" \
   --exclude "$MEDIA_DIR/tg-staging" \
   --exclude '*.insv' \
   --exclude "$MEDIA_DIR/thumbs" \

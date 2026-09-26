@@ -1,0 +1,26 @@
+---
+# Vaultwarden deployment (docs/VAULTWARDEN-PLAN.md, Phase 1). The image and its
+# digest are pinned in infra/vaultwarden/docker-compose.yml, the single place
+# to bump them; nothing here names a version.
+
+vaultwarden_dir: /opt/vaultwarden
+vaultwarden_data: /var/lib/vaultwarden
+# The container runs as this uid:gid (compose `user:`). On the Ubuntu cloud
+# image it is the `ubuntu` user, which is fine: the data dir is 0700 and the
+# process inside the container holds no capabilities.
+vaultwarden_uid: 1000
+vaultwarden_gid: 1000
+vaultwarden_port: 8222
+
+# The owner's Vaultwarden login email: the only account allowed to create an
+# organisation. Not a secret, but personal, so it is not committed. Pass it on
+# the FIRST run with --extra-vars "vaultwarden_owner_email=you@example.com";
+# later runs read it back from the rendered env file.
+# vaultwarden_owner_email: (no default)
+
+# Expose the vault on https://<this node>.<tailnet>.ts.net via tailscale serve.
+# Needs MagicDNS and "HTTPS Certificates" enabled in the Tailscale admin console
+# first (DNS page). Set false to deploy the container without exposing it.
+vaultwarden_tailscale_serve: true
+
+vaultwarden_log_level: warn

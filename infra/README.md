@@ -8,8 +8,13 @@ recognition, background mobile auto-backup, albums, sharing and EXIF handling.
 Rebuilding any of that would produce a worse result after months of work.
 
 Nothing in this directory is application code. It is infrastructure automation:
-a pinned compose file, four Ansible roles, Postgres tuning, and the console
+a pinned compose file, Ansible roles, Postgres tuning, and the console
 steps that cannot be scripted.
+
+**Vaultwarden** (the family password manager) is deployed here the same way:
+upstream image, pinned, never forked. It is a separate compose project with its
+own playbook, `ansible/vaultwarden.yml`, so deploying it never restarts Immich.
+Plan: `docs/VAULTWARDEN-PLAN.md`; operations: `docs/VAULTWARDEN-RUNBOOK.md`.
 
 ## Why not Vercel
 
@@ -33,7 +38,11 @@ infra/
 │       ├── hardening/       ufw, fail2ban, sshd, unattended-upgrades, sysctl
 │       ├── docker/          Docker Engine from Docker's own apt repo
 │       ├── tailscale/       The only way in
-│       └── immich/          Block volume, compose project, health wait
+│       ├── immich/          Block volume, compose project, health wait
+│       └── vaultwarden/     Family password manager (own playbook: vaultwarden.yml)
+├── vaultwarden/             Pinned compose, vw-secrets helper, SECURITY-NOTES.md
+├── tailscale/
+│   └── policy.hujson        Family access rule: owner everything, family vm:443 only
 ├── postgres/
 │   └── tuning.conf          Tuned for 12 GB RAM and pgvector
 └── docs/

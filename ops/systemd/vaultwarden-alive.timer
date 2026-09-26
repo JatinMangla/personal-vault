@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Vaultwarden every 5 minutes
+Documentation=file:///opt/personal-vault/ops/README.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=vaultwarden-alive.service
+
+[Install]
+WantedBy=timers.target

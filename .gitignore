@@ -11,6 +11,12 @@ secrets/
 *.tfstate
 *.tfstate.*
 .restic-pass
+.restic-offsite-pass
+# Vaultwarden's env files exist only on the VM (/opt/vaultwarden); a stray
+# copy must never be committable. rclone.conf holds the Google Drive token.
+secrets.env
+vaultwarden.env
+rclone.conf
 *.kubeconfig
 id_rsa*
 *.ovpn

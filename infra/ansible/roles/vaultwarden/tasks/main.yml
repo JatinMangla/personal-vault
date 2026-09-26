@@ -1,0 +1,298 @@
+---
+# Deploys Vaultwarden (docs/VAULTWARDEN-PLAN.md, Phase 1). Does not build it,
+# does not fork it. Run through infra/ansible/vaultwarden.yml, which touches
+# nothing else: the main playbook restarts Immich's Postgres on every run, and
+# a password-manager change must never interrupt the photo stack or a drain.
+
+# --- Host tools the backup, drill and secrets helper need -----------------
+
+- name: Install sqlite3, argon2 and rclone
+  # sqlite3: integrity checks on dumps (backup + restore drill).
+  # argon2:  hashes the optional admin token on the host (vw-secrets).
+  # rclone:  restic's transport to the off-Oracle copy (plan C2).
+  ansible.builtin.apt:
+    name:
+      - sqlite3
+      - argon2
+      - rclone
+    state: present
+
+# --- Tailnet identity ------------------------------------------------------
+
+- name: Read this node's Tailscale status
+  ansible.builtin.command:
+    cmd: tailscale status --json
+  register: vw_ts_status
+  changed_when: false
+
+- name: Derive the vault's HTTPS name from MagicDNS
+  ansible.builtin.set_fact:
+    vaultwarden_fqdn: "{{ (vw_ts_status.stdout | from_json).Self.DNSName | default('') | regex_replace('\\.$', '') }}"
+    vw_ts_tags: "{{ (vw_ts_status.stdout | from_json).Self.Tags | default([]) }}"
+
+- name: Require MagicDNS
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_fqdn | length > 0
+      - vaultwarden_fqdn is search('\.ts\.net$')
+    fail_msg: >-
+      This node has no *.ts.net MagicDNS name ({{ vaultwarden_fqdn | default('none') }}).
+      Enable MagicDNS in the Tailscale admin console (DNS page), then re-run.
+
+- name: Refuse a tagged node
+  # Plan C3. A tagged node stops being owned by the owner's user, which
+  # silently changes which access rules match it - including the owner's own
+  # Syncthing and SSH paths that feed the drain. The policy uses a `hosts`
+  # alias instead (infra/tailscale/policy.hujson).
+  ansible.builtin.assert:
+    that:
+      - vw_ts_tags | length == 0
+    fail_msg: >-
+      This node carries Tailscale tags {{ vw_ts_tags }}. Remove them: the
+      access policy for the family relies on the VM staying user-owned.
+
+# --- Owner email (not a secret, not committed) -----------------------------
+
+- name: Look for a previously rendered env file
+  ansible.builtin.slurp:
+    src: "{{ vaultwarden_dir }}/vaultwarden.env"
+  register: vw_prev_env
+  failed_when: false
+  when: vaultwarden_owner_email is not defined
+
+- name: Reuse the owner email from the previous run
+  ansible.builtin.set_fact:
+    vaultwarden_owner_email: >-
+      {{ (vw_prev_env.content | b64decode)
+         | regex_search('(?m)^ORG_CREATION_USERS=(.+)$', '\1') | first }}
+  when:
+    - vaultwarden_owner_email is not defined
+    - vw_prev_env.content is defined
+    - (vw_prev_env.content | b64decode) is search('(?m)^ORG_CREATION_USERS=.+$')
+
+- name: Require the owner email
+  ansible.builtin.assert:
+    that:
+      - vaultwarden_owner_email is defined
+      - vaultwarden_owner_email is search('^[^@\s]+@[^@\s]+$')
+    fail_msg: >-
+      First run: pass --extra-vars "vaultwarden_owner_email=you@example.com"
+      (the email you will log in to Vaultwarden with).
+
+# --- Data -----------------------------------------------------------------
+
+- name: Create the data directory on the boot volume
+  ansible.builtin.file:
+    path: "{{ vaultwarden_data }}"
+    state: directory
+    owner: "{{ vaultwarden_uid }}"
+    group: "{{ vaultwarden_gid }}"
+    mode: '0700'
+
+- name: Create the dump directory, readable by root only
+  # vaultwarden-backup.sh (root) moves each VACUUM INTO dump here. The
+  # container never needs to read its own backups, so it cannot.
+  ansible.builtin.file:
+    path: "{{ vaultwarden_data }}/backups"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Check for an admin-page config.json
+  ansible.builtin.stat:
+    path: "{{ vaultwarden_data }}/config.json"
+  register: vw_config_json
+
+- name: Refuse to deploy over config.json
+  # Plan M2. It overrides vaultwarden.env silently (so this role would appear
+  # to work and change nothing) and stores the admin token in plaintext.
+  ansible.builtin.fail:
+    msg: >-
+      {{ vaultwarden_data }}/config.json exists - someone pressed Save on /admin.
+      Move the settings you want into the role, then delete that file
+      (sudo rm {{ vaultwarden_data }}/config.json) and re-run.
+  when: vw_config_json.stat.exists
+
+# --- Compose project ------------------------------------------------------
+
+- name: Create the project directory
+  ansible.builtin.file:
+    path: "{{ vaultwarden_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Install docker-compose.yml
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../vaultwarden/docker-compose.yml"
+    dest: "{{ vaultwarden_dir }}/docker-compose.yml"
+    owner: root
+    group: root
+    mode: '0640'
+  notify: Restart vaultwarden
+
+- name: Render vaultwarden.env
+  ansible.builtin.template:
+    src: vaultwarden.env.j2
+    dest: "{{ vaultwarden_dir }}/vaultwarden.env"
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart vaultwarden
+
+- name: Ensure secrets.env exists without touching its contents
+  # Written only by vw-secrets. Ansible never sees or logs these values.
+  ansible.builtin.file:
+    path: "{{ vaultwarden_dir }}/secrets.env"
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+    modification_time: preserve
+    access_time: preserve
+
+- name: Refuse a plaintext admin token
+  # A token in secrets.env must be an Argon2id PHC string (vw-secrets writes
+  # one). A plaintext token is readable by anyone who reads the file or a
+  # backup of it. Checked by grep so the value never enters Ansible's output.
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      grep -E '^ADMIN_TOKEN=' {{ vaultwarden_dir }}/secrets.env
+      | grep -vqE "^ADMIN_TOKEN='[$]argon2id[$]"
+    executable: /bin/bash
+  register: vw_plain_token
+  changed_when: false
+  failed_when: vw_plain_token.rc == 0
+  no_log: true
+
+- name: Install the secrets helper
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../vaultwarden/vw-secrets.sh"
+    dest: /usr/local/sbin/vw-secrets
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Validate the compose file
+  ansible.builtin.command:
+    cmd: docker compose config --quiet
+    chdir: "{{ vaultwarden_dir }}"
+  changed_when: false
+
+- name: Pull the pinned image
+  ansible.builtin.command:
+    cmd: docker compose pull
+    chdir: "{{ vaultwarden_dir }}"
+  register: vw_pull
+  changed_when: "'Pull complete' in vw_pull.stderr or 'Downloaded newer image' in vw_pull.stderr"
+
+- name: Start Vaultwarden
+  ansible.builtin.command:
+    cmd: docker compose up -d --remove-orphans
+    chdir: "{{ vaultwarden_dir }}"
+  register: vw_up
+  changed_when: "'Started' in vw_up.stderr or 'Created' in vw_up.stderr or 'Recreated' in vw_up.stderr"
+
+- name: Confirm the running image is arm64
+  # Plan M4, checked on the host rather than trusted from the digest comment.
+  # Via the container, not the tag: an image pulled as name:tag@digest is
+  # stored under its digest only, so `docker image inspect name:tag` misses it.
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      docker image inspect --format '{{ '{{' }}.Architecture{{ '}}' }}'
+      "$(docker inspect --format '{{ '{{' }}.Image{{ '}}' }}' vaultwarden)"
+    executable: /bin/bash
+  register: vw_arch
+  changed_when: false
+  failed_when: vw_arch.stdout | trim != 'arm64'
+
+- name: Wait for /alive on loopback
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ vaultwarden_port }}/alive"
+    status_code: 200
+  register: vw_alive
+  retries: 30
+  delay: 2
+  until: vw_alive.status == 200
+  failed_when: false
+
+- name: Show the container log if it never answered
+  ansible.builtin.command:
+    cmd: docker logs --tail 40 vaultwarden
+  register: vw_logs
+  changed_when: false
+  when: vw_alive.status != 200
+
+- name: Fail with the log attached
+  ansible.builtin.fail:
+    msg: |
+      Vaultwarden did not answer on 127.0.0.1:{{ vaultwarden_port }}/alive.
+
+      {{ vw_logs.stdout | default('') }}
+      {{ vw_logs.stderr | default('') }}
+  when: vw_alive.status != 200
+
+# --- HTTPS on the tailnet ---------------------------------------------------
+# The web vault and every Bitwarden app require HTTPS. tailscale serve
+# terminates TLS with an auto-renewed *.ts.net certificate on the Tailscale
+# interface only. No ufw or OCI change: ufw already allows tailscale0.
+
+- name: Read the current serve config
+  ansible.builtin.command:
+    cmd: tailscale serve status --json
+  register: vw_serve_status
+  changed_when: false
+  failed_when: false
+  when: vaultwarden_tailscale_serve | bool
+
+- name: Serve the vault on port 443 of the tailnet name
+  # `timeout`: when HTTPS certificates are not enabled for the tailnet,
+  # tailscale serve prints an enable link and WAITS for it. Bounded, so the
+  # play fails with guidance instead of hanging.
+  ansible.builtin.command:
+    cmd: "timeout 60 tailscale serve --bg --https=443 http://127.0.0.1:{{ vaultwarden_port }}"
+  register: vw_serve
+  changed_when: vw_serve.rc == 0
+  failed_when: false
+  when:
+    - vaultwarden_tailscale_serve | bool
+    - ('http://127.0.0.1:' ~ vaultwarden_port) not in vw_serve_status.stdout
+
+- name: Fail with guidance if serve could not be enabled
+  ansible.builtin.fail:
+    msg: |
+      tailscale serve failed (rc={{ vw_serve.rc }}). Most likely HTTPS
+      certificates are not enabled: Tailscale admin console -> DNS ->
+      enable MagicDNS and "HTTPS Certificates", then re-run.
+
+      {{ vw_serve.stdout | default('') }}
+      {{ vw_serve.stderr | default('') }}
+  when:
+    - vw_serve is defined
+    - vw_serve.rc is defined
+    - vw_serve.rc != 0
+
+- name: Check the vault end to end over HTTPS
+  # The first request can take a few seconds while tailscaled obtains the
+  # certificate.
+  ansible.builtin.uri:
+    url: "https://{{ vaultwarden_fqdn }}/alive"
+    status_code: 200
+    validate_certs: true
+  register: vw_https
+  retries: 12
+  delay: 5
+  until: vw_https.status == 200
+  when: vaultwarden_tailscale_serve | bool
+
+- name: Report
+  ansible.builtin.debug:
+    msg: >-
+      Vaultwarden is up at https://{{ vaultwarden_fqdn }} (tailnet only).
+      Next, in order: sudo vw-secrets push; install the backup and alive
+      timers; apply infra/tailscale/policy.hujson. See docs/RUNBOOK.md ->
+      "Vaultwarden".

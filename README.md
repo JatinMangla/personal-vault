@@ -7,7 +7,7 @@ database and the photos that fit are backed up offsite (see 2 below), but
 **the Insta360 footage exists as ONE copy, in a Telegram channel** — no free
 tier holds 250 GB twice. See `docs/RUNBOOK.md` for protecting that account.
 
-Four components, one monorepo:
+Five components, one monorepo:
 
 | | Component | What it is | Where it runs |
 |---|---|---|---|
@@ -15,6 +15,7 @@ Four components, one monorepo:
 | **B** | Document vault | End-to-end encrypted, **built here** | Vercel + Supabase (DB + Storage) |
 | **C** | Backup & ops | restic, systemd, restore drills | Oracle VM → Oracle Object Storage |
 | **D** | Health dashboard | Push-based metrics at `/status` | Oracle collector → Vercel → Supabase |
+| **E** | Family password manager | Vaultwarden, **deployed** not forked; Bitwarden apps | Oracle VM, tailnet only (`docs/VAULTWARDEN-PLAN.md`) |
 
 ---
 
@@ -97,6 +98,7 @@ contains no photo-management code.
 | Automatic camera-roll backup | Immich's official app — **native only** | Free |
 | Documents | This PWA | Free |
 | Storage & health monitoring | This PWA (`/status`) | Free |
+| Family passwords | Bitwarden's official apps, pointed at the self-hosted vault | Free |
 
 Background camera-roll upload is **only** possible in a native app — iOS does not
 grant a browser that permission. If photos were a PWA, automatic backup would
@@ -117,11 +119,14 @@ No developer account is needed. Nothing is submitted or reviewed.
 | Supabase Storage | 1 GB files, 5 GB/mo egress | < 1 GB | Low — no card on file | Soft limit refuses uploads at 90% |
 | Vercel Hobby | 100 GB transfer, 1M function calls/mo | < 1 GB, ~43k calls | Very low — files bypass Vercel | Presigned URLs only |
 | Supabase | 500 MB Postgres | ~80 MB (78 of it metrics) | Low | 30-day retention, pruned nightly |
-| Oracle Object Storage | 10 GiB (Trial) / ~20 GB (Always Free) | < 8 GiB | Objects DELETED if over limit at trial end | Script refuses to back up past 85% |
+| Oracle Object Storage | 10 GiB (Trial) / ~20 GB (Always Free) | 312 MiB measured 2026-09-26; < 8 GiB | Objects DELETED if over limit at trial end | Script refuses to back up past 85%, and publishes the size it refused on |
 | Telegram (Insta360 archive) | No storage cap; 2 GB/file (4 GB Premium) | ~250 GB | **None in money — but it is the ONLY copy of the footage**, with no SLA | Ledger now in nightly restic; see RUNBOOK for account hardening |
-| Tailscale | 3 users / 100 devices | 1 / ~4 | None | — |
+| Tailscale (Personal, "free forever") | 6 users, unlimited user devices, 3 ACL groups (checked 2026-09-26) | 5 users (owner + 4 family), 1 group | None in money; a 7th person cannot join | Never invite a 7th user; the family group is the one group used |
+| Vaultwarden (self-hosted) | Open source, runs on the existing VM | < 100 MB RAM, a few MB of disk | None | `mem_limit: 256m`, `cpus: 1.0` |
+| Bitwarden push relay | No published price: bitwarden.com/host issues the installation id + key for an email address, with no payment step (checked 2026-09-26) | 5 users' devices | None in money today; if it ever became paid, turn it off and phones sync on open instead. **Sees user, device and item UUIDs and change timestamps**, never names or contents | Optional and removable: `sudo vw-secrets push-off` |
+| Google Drive (off-Oracle copy) | 15 GB with every Google Account, shared with its Gmail and Photos (checked 2026-09-26) | < 50 MB, restic-encrypted | None in money; a full Drive makes the nightly copy fail loudly | `drive.file` scope: the token sees only files rclone created |
 | GitHub Actions | 2,000 min/mo | < 100 min | None | — |
-| healthchecks.io | 20 checks | 4 (backup, metrics, tg-upload, video-sync) | None | — |
+| healthchecks.io (Hobbyist, $0) | 20 checks (checked 2026-09-26) | 6 (backup, metrics, tg-upload, video-sync, vaultwarden-backup, vaultwarden-alive) | None | — |
 | **Total** | | | | **$0.00/year** |
 
 **On the 1-minute metrics cadence** (2026-09-16): it adds no service and costs
@@ -151,7 +156,7 @@ notice — Oracle halved its ARM allowance in June 2026.
 personal-vault/
 ├── CLAUDE.md              Project constitution — read first, every session
 ├── .claude/               Subagents, skills, and a tested secret-blocking hook
-├── infra/                 COMPONENT A — deploy Immich (Ansible + compose)
+├── infra/                 COMPONENTS A + E — deploy Immich and Vaultwarden (Ansible + compose)
 ├── vault/                 COMPONENTS B + D — Next.js E2EE vault + dashboard
 ├── ops/                   COMPONENTS C + D — backup, restore drill, collector
 └── .github/workflows/     CI, weekly security scan, Supabase keepalive
@@ -173,8 +178,9 @@ Each directory has its own README with the detail: `infra/README.md`,
 | P6 | **Responsive UI + PWA** (gate) | **Passed** — 142/142, PWA installable |
 | P7 | Collector + `/status` dashboard | **Done** — live metrics every 1 min, healthcheck green |
 | P8 | Monitoring + final audit | Workflows written; needs a month of live billing |
+| P9 | **Family password manager** (gates in `docs/VAULTWARDEN-PLAN.md` §5) | Built and tested in the repo 2026-09-26; **not yet deployed**. Owner steps: `docs/VAULTWARDEN-RUNBOOK.md` |
 
-All four components are deployed and running. The remaining gate is **P3**: the
+Components A–D are deployed and running; E is built and awaiting deployment. The remaining gate is **P3**: the
 nightly backup completes and passes its integrity check, and a restore drill has
 proven the database path — an 18 MB Immich dump restored into a clean Postgres
 and served over the API. What is still unproven is whether **originals** restore
