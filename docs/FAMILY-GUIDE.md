@@ -67,6 +67,11 @@ login. If it saves, you are set up. Delete the test login afterwards.
 - **"Cannot connect" or it will not save:** open the Tailscale app and make
   sure it says **Connected**. Your saved passwords still work without it; only
   saving new ones needs the connection.
+- **"This site can't be reached" while Tailscale is connected:** the phone is
+  looking up addresses somewhere else. Check all three:
+  - Android Settings → Network → **Private DNS** → *Automatic*.
+  - Tailscale app → Settings → **Use Tailscale DNS** → on.
+  - Chrome → Settings → Privacy → **Use secure DNS** → *your current provider*.
 - **New phone:** install both apps again (Parts 1 and 2), then log in instead of
   creating an account.
 - **Anything else:** call the helper. Never tell anyone your master password,
