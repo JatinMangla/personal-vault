@@ -134,10 +134,9 @@ new checks green. `immich-backup.service` is copied again because it now also
 reads `/var/lib/vaultwarden`. From the next 03:00 run, the Oracle snapshot
 carries the vault's dumps too.
 
-Check the off-Oracle password on the paper opens the repository (same test as
-A1 in `docs/EMERGENCY-KIT.md`, with `--password-file` pointed at what you type
-and `RESTIC_REPOSITORY=rclone:gdrive:personal-vault-offsite`
-`RCLONE_CONFIG=/var/lib/personal-vault/rclone/rclone.conf`).
+Check that the off-Oracle password on the paper opens the repository: the A4
+one-liner in `docs/EMERGENCY-KIT.md` → "Test the kit". restic prompts for it
+with the input hidden. Want `PAPER OK`.
 
 ### 7. [VM] + [BROWSER] Your own account and the Family organisation
 
