@@ -16,6 +16,10 @@
       - argon2
       - rclone
     state: present
+    # This playbook runs alone, without playbook.yml's cache refresh; a stale
+    # cache fails the install with a 404 on a superseded package version.
+    update_cache: true
+    cache_valid_time: 3600
 
 # --- Tailnet identity ------------------------------------------------------
 
@@ -62,9 +66,11 @@
 
 - name: Reuse the owner email from the previous run
   ansible.builtin.set_fact:
+    # regex_findall with one group returns the group's text: no backreference
+    # string, whose backslash Jinja could otherwise turn into a control char.
     vaultwarden_owner_email: >-
       {{ (vw_prev_env.content | b64decode)
-         | regex_search('(?m)^ORG_CREATION_USERS=(.+)$', '\1') | first }}
+         | regex_findall('(?m)^ORG_CREATION_USERS=(.+)$') | first | trim }}
   when:
     - vaultwarden_owner_email is not defined
     - vw_prev_env.content is defined
